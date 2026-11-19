@@ -8,6 +8,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$HOME/build_ios_xcode"
 APP_DIR="$BUILD_DIR/bin/Release"
+if [ ! -d "$APP_DIR/Blender.app" ] && [ -d "$BUILD_DIR/bin/Release-iphoneos/Blender.app" ]; then
+  APP_DIR="$BUILD_DIR/bin/Release-iphoneos"
+fi
 IPA="$HOME/Blender-iPad-Unofficial.ipa"
 LOG="$HOME/build.log"
 
@@ -23,6 +26,11 @@ if [ "$BUILD_RC" -ne 0 ] || grep -q "error:" "$LOG"; then
   echo ""
   echo "!! Build error — skipping the rest. See errors below:"
   grep -n "error:" "$LOG" | head -30
+  exit 1
+fi
+
+if [ ! -f "$APP_DIR/Blender.app/Blender" ]; then
+  echo "!! Error: $APP_DIR/Blender.app/Blender executable not found!"
   exit 1
 fi
 

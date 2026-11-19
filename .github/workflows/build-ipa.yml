@@ -84,13 +84,31 @@ jobs:
 
       - name: Package .ipa
         run: |
-          APP="$(find build_ios -name Blender.app -type d | head -1)"
-          echo "app bundle: $APP"
+          # Locate the real installed Blender.app containing the executable.
+          # Note: CMake creates an empty placeholder directory at build_ios/bin/Blender.app during configure;
+          # the actual compiled and assembled bundle lives in bin/Release/Blender.app or bin/Release-iphoneos/Blender.app.
+          APP=$(find build_ios -type d -name "Blender.app" | grep -Ei "iphoneos|Release" | head -1)
+          if [ -z "$APP" ] || [ ! -f "$APP/Blender" ]; then
+            for candidate in $(find build_ios -type d -name "Blender.app"); do
+              if [ -f "$candidate/Blender" ]; then
+                APP="$candidate"
+                break
+              fi
+            done
+          fi
+          echo "Selected app bundle: $APP"
           test -n "$APP" || { echo "::error::Blender.app not found"; exit 1; }
+          test -f "$APP/Blender" || { echo "::error::Executable $APP/Blender not found! Build failed or empty placeholder selected."; exit 1; }
+          echo "Blender executable verified: $(ls -lh "$APP/Blender")"
+
+          # Strip non-runtime build artifacts (.o/.a) so on-device / sideloading signers do not fail
+          find "$APP" \( -name "*.o" -o -name "*.a" \) -print -delete || true
+
           # Bundle precompiled iOS dylibs into the app (mirrors the reference recipe).
           LIBDST="$APP/Assets/lib"; mkdir -p "$LIBDST"
           find blender/lib/ios_arm64 -name '*.dylib' \( -type f -o -type l \) -exec cp -fL {} "$LIBDST/" \; || true
           find "$APP" -name 'libpython*.dylib' -exec cp -fn {} "$LIBDST/" \; || true
+
           # iPad-Unofficial branding + iOS app icon (iOS ignores the .icns, so inject PNGs).
           bash overlay/build/apply_branding.sh "$APP" overlay/ios/icon/icon_1024.png
           codesign --force --deep --sign - "$APP" || true
@@ -98,6 +116,7 @@ jobs:
           cp -R "$APP" Payload/
           find Payload -type l ! -exec test -e {} \; -delete || true
           zip -qr Blender-iPad-Unofficial.ipa Payload
+          echo "Final IPA size: $(du -sh Blender-iPad-Unofficial.ipa)"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
