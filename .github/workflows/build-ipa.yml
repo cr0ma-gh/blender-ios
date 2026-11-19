@@ -11,6 +11,11 @@ name: build-ipa
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish .ipa as a GitHub Release"
+        type: boolean
+        default: true
   push:
     tags: ["v*"]
 
@@ -101,18 +106,20 @@ jobs:
           path: Blender-iPad-Unofficial.ipa
           if-no-files-found: error
 
-      # Only tag pushes (e.g. v0.1.1) publish a Release — named by the tag.
-      # Manual runs (workflow_dispatch) stop after the artifact upload above, so they
-      # don't clutter Releases with build-N entries.
-      - name: Publish Release (tag pushes only)
-        if: startsWith(github.ref, 'refs/tags/')
+      # Publish Release on tag pushes or on manual workflow_dispatch with publish_release=true
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && (inputs.publish_release == true || inputs.publish_release == 'true'))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ github.ref_name }}"
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="build-${{ github.run_number }}"
+          fi
           # Create the release if it's new; otherwise just (re)attach the IPA.
           gh release create "$TAG" Blender-iPad-Unofficial.ipa \
             --repo "${{ github.repository }}" \
             --title "Blender iPad (Unofficial) $TAG" \
-            --notes "Unsigned IPA built from blender/blender@ios (${BLENDER_COMMIT}) + this repo's patch. Sideload with Sideloadly or AltStore/SideStore (free Apple ID = 7-day expiry). Unofficial build — not affiliated with the Blender Foundation." \
+            --notes "Unsigned IPA built from blender/blender@ios (${BLENDER_COMMIT}) + UI & input adaptations. Sideload with Sideloadly, AltStore, SideStore, or TrollStore (free Apple ID = 7-day expiry). Unofficial build — not affiliated with the Blender Foundation." \
           || gh release upload "$TAG" Blender-iPad-Unofficial.ipa --repo "${{ github.repository }}" --clobber
