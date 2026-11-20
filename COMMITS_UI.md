@@ -55,6 +55,15 @@ Il branch upstream ufficiale `ios` si avviava su iOS ma era incompleto per l'inp
 
 ---
 
+## 2a. UX tablet dal piano upstream (solo build `tablet`, `patches/tablet-ux.patch`)
+Implementazione nostra di voci del post *"Blender on Tablet: Path to Release"* (code.blender.org, novembre 2026). Upstream questi punti sono ancora task aperti senza codice (#165897–#165902, #166024, #166529):
+- **Barra modificatori** (≈ *Modifier Wheel* #165901): barra flottante e trascinabile con Ctrl / Shift / Alt / Cmd. Tocco = one-shot (si rilascia dopo il click successivo), secondo tocco = blocco, terzo = spento. Il pulsante in alto la comprime.
+- **Conferma / Annulla + X / Y / Z** sulla stessa barra (≈ status bar cliccabile #165900): Invio/Esc e assi per trasformazioni e altri operatori modali.
+- **Ricerca** (≈ *Top Level Search* #165902), **pie Vista**, **pie Shading**, **Focus/nascondi UI** nell'header della Vista 3D (*Portfolio Review* #166024).
+- **Annulla / Ripeti** e **Apri / Salva** nella topbar (*Scene Assembly* #166529).
+
+Non ancora fattibili sulla 5.0 senza codice upstream: UI responsive/"Compact UI", tastiera a schermo dedicata, modifica delle gesture, hand-off desktop.
+
 ## 2b. Backport da `main` (solo build `tablet`, `patches/tablet-ui-backports.patch`)
 - `b5fd02b5` — *UI: Quad View Resizing*: ridimensionamento dei quadranti della Quad View trascinando il punto centrale (comodo con dito/Pencil).
 - `728c8624` — *UI: Fine adjusting values with arrows on number button*: frecce dei campi numerici con passo fine (Shift) e snapping (Ctrl).

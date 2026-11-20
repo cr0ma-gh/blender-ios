@@ -41,11 +41,16 @@ jobs:
           # (Menu Behavior Preferences #144838, Experimental editor dock #144945)
           # + touch/keyboard UI backports from main (Quad View resizing, number-button
           # arrow stepping, hold-shortcut tool switching).
+          # Then (post_patches, on top of the iPad patch) the tablet UX from the upstream
+          # "Blender on Tablet: Path to Release" plan: on-screen modifier/confirm bar,
+          # search, pie menus, focus, undo/redo and open/save buttons.
           - variant: tablet
             extra_patches: patches/tablet-ui.patch patches/tablet-ui-backports.patch
+            post_patches: patches/tablet-ux.patch
           # Blender 5.0 as on the ios branch, without the workshop UI.
           - variant: legacy
             extra_patches: ""
+            post_patches: ""
     env:
       IPA_NAME: Blender-iPad-Unofficial-${{ matrix.variant }}.ipa
 
@@ -88,6 +93,10 @@ jobs:
             git apply "../overlay/$p"
           done
           git apply ../overlay/patches/blender-ipad.patch
+          for p in ${{ matrix.post_patches }}; do
+            echo "Applying $p"
+            git apply "../overlay/$p"
+          done
           # Original Blender branding: upstream Info.plist and official icon are kept as-is.
           echo "app icon bytes: $(wc -c < release/ios/Blender.app/Assets/blender_icon.icns) (must be large, not an LFS pointer)"
 

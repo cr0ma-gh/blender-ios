@@ -28,6 +28,20 @@ Two builds are produced from that base:
     - `b5fd02b5` — *UI: Quad View Resizing* (Harley Acheson): drag the Quad View center to resize
     - `728c8624` — *UI: Fine adjusting values with arrows on number button* (Pratik Borhade)
     - `2d186b8c` — *UI: Support holding a shortcut to temporarily switch tools* (John Kiril Swenson)
+  - and, on top of `blender-ipad.patch`, [patches/tablet-ux.patch](patches/tablet-ux.patch):
+    this project's own implementation of items from upstream's tablet plan
+    ("Blender on Tablet: Path to Release", code.blender.org, Nov 2026), which has no upstream
+    code yet:
+    - `intern/ghost/intern/GHOST_WindowIOS.mm` — floating, draggable **modifier bar**
+      (Ctrl / Shift / Alt / Cmd; tap = one-shot, tap again = lock) with **Confirm / Cancel**
+      and **X / Y / Z** keys for modal tools (plan items #165901 Modifier Wheel, #165900
+      clickable confirm/cancel).
+    - `intern/ghost/intern/GHOST_SystemIOS.mm` — `getModifierKeys()` reports the bar's held
+      modifiers so Blender's modifier state stays in sync.
+    - `scripts/startup/bl_ui/space_view3d.py` — 3D Viewport header buttons: menu **Search**,
+      **View pie**, **Shading pie**, **Focus** (hide UI) (#165902, #166024).
+    - `scripts/startup/bl_ui/space_topbar.py` — topbar **Undo / Redo** and **Open / Save**
+      buttons (#166529, #166024).
 - **legacy** — the pinned commit with `blender-ipad.patch` only.
 
 The newer `ios` tip `a1de44dd` (Blender 5.1.2) is not used yet: no 5.1 precompiled

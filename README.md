@@ -74,7 +74,9 @@ Download the latest `.ipa` from the [Releases](../../releases) page. Each releas
 - `Blender-iPad-Unofficial-tablet.ipa` — includes the new touch/tablet UI from upstream's
   `ios-workshop` branch (touch-friendly menu behavior, experimental editor dock) plus a few
   later UI improvements backported from Blender `main` (Quad View resizing by dragging,
-  finer number-field arrows, hold-a-key temporary tool switching).
+  finer number-field arrows, hold-a-key temporary tool switching), plus touch UX inspired by
+  Blender's tablet plan: a floating **modifier bar** (Ctrl/Shift/Alt/Cmd, Confirm/Cancel,
+  X/Y/Z), and Search, View/Shading pies, Focus, Undo/Redo and Open/Save buttons.
 - `Blender-iPad-Unofficial-legacy.ipa` — the plain upstream `ios` branch UI.
 
 | Method | Needs a Mac? | Re-sign interval | iPadOS 26.5 |

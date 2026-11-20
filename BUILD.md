@@ -37,6 +37,8 @@ git apply /path/to/blender-ipad-unofficial/patches/tablet-ui.patch
 git apply /path/to/blender-ipad-unofficial/patches/tablet-ui-backports.patch
 #    both builds:
 git apply /path/to/blender-ipad-unofficial/patches/blender-ipad.patch
+#    'tablet' build only, on top of the iPad patch: touch UX (modifier bar, header buttons)
+git apply /path/to/blender-ipad-unofficial/patches/tablet-ux.patch
 
 # 4. (Blender's original Info.plist and official icon are used as-is.)
 

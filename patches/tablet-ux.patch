@@ -1,0 +1,451 @@
+diff --git a/intern/ghost/intern/GHOST_SystemIOS.mm b/intern/ghost/intern/GHOST_SystemIOS.mm
+index 8e5e4945a..8d3a6e248 100644
+--- a/intern/ghost/intern/GHOST_SystemIOS.mm
++++ b/intern/ghost/intern/GHOST_SystemIOS.mm
+@@ -12,6 +12,7 @@
+ #include "GHOST_EventCursor.hh"
+ #include "GHOST_EventDragnDrop.hh"
+ #include "GHOST_EventString.hh"
++#include "GHOST_ModifierKeys.hh"
+ #include "GHOST_WindowManager.hh"
+ 
+ #ifdef WITH_INPUT_NDOF
+@@ -617,9 +618,18 @@ GHOST_TSuccess GHOST_SystemIOS::setMouseCursorPosition(int32_t /*x*/, int32_t /*
+   return GHOST_kSuccess;
+ }
+ 
+-GHOST_TSuccess GHOST_SystemIOS::getModifierKeys(GHOST_ModifierKeys & /*keys*/) const
++/* Defined in GHOST_WindowIOS.mm: modifiers held through the on-screen modifier bar. */
++extern uint32_t ghost_ios_virtual_modifiers;
++
++GHOST_TSuccess GHOST_SystemIOS::getModifierKeys(GHOST_ModifierKeys &keys) const
+ {
+-  /* iOS Passthrough. */
++  /* Report the on-screen modifier bar state, so window (re)activation does not reset
++   * modifiers that are held from the bar. Hardware keyboard modifiers arrive as key events. */
++  const uint32_t mask = ghost_ios_virtual_modifiers;
++  keys.set(GHOST_kModifierKeyLeftControl, (mask & (1u << 0)) != 0);
++  keys.set(GHOST_kModifierKeyLeftShift, (mask & (1u << 1)) != 0);
++  keys.set(GHOST_kModifierKeyLeftAlt, (mask & (1u << 2)) != 0);
++  keys.set(GHOST_kModifierKeyLeftOS, (mask & (1u << 3)) != 0);
+   return GHOST_kSuccess;
+ }
+ 
+diff --git a/intern/ghost/intern/GHOST_WindowIOS.mm b/intern/ghost/intern/GHOST_WindowIOS.mm
+index 8fda77f6e..245ed756c 100644
+--- a/intern/ghost/intern/GHOST_WindowIOS.mm
++++ b/intern/ghost/intern/GHOST_WindowIOS.mm
+@@ -49,6 +49,11 @@
+ #  define IOS_WINDOW_LOG(...)
+ #endif
+ 
++/* Modifiers currently held through the on-screen modifier bar (see "Tablet Modifier Bar").
++ * Bits: 0 = Ctrl, 1 = Shift, 2 = Alt, 3 = Cmd (OS). Read by GHOST_SystemIOS::getModifierKeys(). */
++extern uint32_t ghost_ios_virtual_modifiers;
++uint32_t ghost_ios_virtual_modifiers = 0;
++
+ struct TouchData {
+   CGPoint pos;
+   bool part_of_multitouch = false;
+@@ -342,6 +347,14 @@ typedef struct UserInputEvent {
+   UIBarButtonItem *toolbar_live_text_item;
+   UIBarButtonItem *toolbar_done_editing_item;
+   UIBarButtonItem *toolbar_cancel_editing_item;
++
++  /* Tablet modifier bar: on-screen Ctrl/Shift/Alt/Cmd + Confirm/Cancel + X/Y/Z keys. */
++  UIView *modifier_bar;
++  UIStackView *modifier_bar_stack;
++  UIButton *modifier_bar_buttons[4];
++  /* Per modifier: 0 = off, 1 = one-shot (released after next click/key), 2 = locked. */
++  int modifier_bar_state[4];
++  bool modifier_bar_collapsed;
+ }
+ 
+ - (void)setSystemAndWindowIOS:(GHOST_SystemIOS *)sysCocoa windowIOS:(GHOST_WindowIOS *)winCocoa;
+@@ -367,6 +380,15 @@ typedef struct UserInputEvent {
+ - (GHOST_TSuccess)popupOnscreenKeyboard:(const GHOST_KeyboardProperties &)keyboard_properties;
+ - (GHOST_TSuccess)hideOnscreenKeyboard;
+ - (const char *)getLastKeyboardString;
++
++/* Tablet modifier bar. */
++- (void)initModifierBar;
++- (void)layoutModifierBar;
++- (void)updateModifierBar;
++- (void)releaseOneShotModifiers;
++- (void)pushModifierBarKey:(GHOST_TKey)key down:(bool)down utf8:(const char *)utf8;
++- (void)handleModifierBarButton:(UIButton *)sender;
++- (void)handleModifierBarDrag:(UIPanGestureRecognizer *)sender;
+ @end
+ 
+ @implementation GHOSTUIWindow
+@@ -389,6 +411,13 @@ typedef struct UserInputEvent {
+   indirect_is_pan = false;
+   pan_accum_x = 0.0f;
+   pan_accum_y = 0.0f;
++  modifier_bar = nil;
++  modifier_bar_stack = nil;
++  for (int i = 0; i < 4; i++) {
++    modifier_bar_buttons[i] = nil;
++    modifier_bar_state[i] = 0;
++  }
++  modifier_bar_collapsed = false;
+   external_keyboard_connected = [GCKeyboard coalescedKeyboard] != nil;
+ 
+   /* Register for notifications of chnanges to the onscreen keyboard. */
+@@ -576,6 +605,10 @@ typedef struct UserInputEvent {
+   pencil_interaction = [[UIPencilInteraction alloc] init];
+   pencil_interaction.delegate = self;
+   [window->getView() addInteraction:pencil_interaction];
++
++  /* On-screen modifier bar (added to the UIWindow above the Metal view, so the gesture
++   * recognizers above never see its touches). */
++  [self initModifierBar];
+ }
+ 
+ /* Turn the user inputs into Blender events.
+@@ -586,6 +619,7 @@ typedef struct UserInputEvent {
+ {
+   /* Lock access to ensure all input-events are received sequentially. */
+   @synchronized(self) {
++    bool left_button_released = false;
+     for (int i = 0; i < event_info.num_events; i++) {
+       UserInputEvent::EventTypes event_type = event_info.event_list[i];
+       IOS_INPUT_LOG(@"%d-%@ %f,%f",
+@@ -643,6 +677,7 @@ typedef struct UserInputEvent {
+                                     window,
+                                     GHOST_kButtonMaskLeft,
+                                     tablet_data));
++          left_button_released = true;
+           break;
+         case UserInputEvent::EventTypes::PINCH_GESTURE:
+           system->pushEvent(
+@@ -669,6 +704,10 @@ typedef struct UserInputEvent {
+           GHOST_ASSERT(FALSE, "GHOST_SystemIOS::generateUserInputEvents unsupported event type");
+       }
+     }
++    /* A finished click/stroke consumes one-shot on-screen modifiers. */
++    if (left_button_released) {
++      [self releaseOneShotModifiers];
++    }
+   }
+ }
+ 
+@@ -1926,6 +1965,278 @@ static GHOST_TKey ghost_key_from_gckeycode(GCKeyCode code)
+   return GHOST_kSuccess;
+ }
+ 
++/* -------------------------------------------------------------------- */
++/** \name Tablet Modifier Bar
++ *
++ * Floating, draggable on-screen bar for using Blender without a hardware keyboard,
++ * following the upstream tablet plan ("Modifier Wheel" #165901 and the clickable
++ * confirm/cancel/axis controls of #165900):
++ * - Ctrl / Shift / Alt / Cmd: tap cycles off -> one-shot -> locked -> off.
++ *   A one-shot modifier is released after the next touch click or bar key.
++ * - Confirm (Return) / Cancel (Esc) and X / Y / Z keys, e.g. for transform.
++ * - The top button collapses / expands the bar; drag the bar to move it.
++ *
++ * Held modifiers are also reported by #GHOST_SystemIOS::getModifierKeys()
++ * through #ghost_ios_virtual_modifiers, so Blender's modifier state stays in sync.
++ * \{ */
++
++static const GHOST_TKey modifier_bar_keys[4] = {
++    GHOST_kKeyLeftControl, GHOST_kKeyLeftShift, GHOST_kKeyLeftAlt, GHOST_kKeyLeftOS};
++
++enum {
++  MODIFIER_BAR_TAG_CONFIRM = 10,
++  MODIFIER_BAR_TAG_CANCEL = 11,
++  MODIFIER_BAR_TAG_AXIS_X = 20,
++  MODIFIER_BAR_TAG_AXIS_Y = 21,
++  MODIFIER_BAR_TAG_AXIS_Z = 22,
++  MODIFIER_BAR_TAG_COLLAPSE = 30,
++};
++
++static UIButton *modifier_bar_button_create(id target,
++                                            NSString *symbol,
++                                            NSString *title,
++                                            NSInteger tag)
++{
++  UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
++  UIImage *image = symbol ? [UIImage systemImageNamed:symbol] : nil;
++  if (image) {
++    [button setImage:image forState:UIControlStateNormal];
++  }
++  else {
++    [button setTitle:title forState:UIControlStateNormal];
++    button.titleLabel.font = [UIFont boldSystemFontOfSize:17.0f];
++  }
++  button.tag = tag;
++  button.tintColor = UIColor.whiteColor;
++  button.layer.cornerRadius = 8.0f;
++  button.accessibilityLabel = title;
++  button.translatesAutoresizingMaskIntoConstraints = NO;
++  /* 44pt: Apple's minimum comfortable touch target. */
++  [button.widthAnchor constraintEqualToConstant:44.0f].active = YES;
++  [button.heightAnchor constraintEqualToConstant:44.0f].active = YES;
++  [button addTarget:target
++                action:@selector(handleModifierBarButton:)
++      forControlEvents:UIControlEventTouchUpInside];
++  return button;
++}
++
++- (void)initModifierBar
++{
++  /* Only the first (main) window gets a bar: the modifier state is global. */
++  static bool bar_created = false;
++  if (bar_created) {
++    return;
++  }
++  bar_created = true;
++
++  modifier_bar = [[UIView alloc] initWithFrame:CGRectZero];
++  modifier_bar.backgroundColor = [UIColor colorWithWhite:0.12f alpha:0.85f];
++  modifier_bar.layer.cornerRadius = 12.0f;
++  modifier_bar.autoresizingMask = UIViewAutoresizingFlexibleTopMargin |
++                                  UIViewAutoresizingFlexibleBottomMargin |
++                                  UIViewAutoresizingFlexibleRightMargin;
++
++  UIStackView *stack = [[UIStackView alloc] initWithFrame:CGRectZero];
++  stack.axis = UILayoutConstraintAxisVertical;
++  stack.alignment = UIStackViewAlignmentCenter;
++  stack.spacing = 2.0f;
++  stack.translatesAutoresizingMaskIntoConstraints = NO;
++  [modifier_bar addSubview:stack];
++  [NSLayoutConstraint activateConstraints:@[
++    [stack.topAnchor constraintEqualToAnchor:modifier_bar.topAnchor constant:6.0f],
++    [stack.bottomAnchor constraintEqualToAnchor:modifier_bar.bottomAnchor constant:-6.0f],
++    [stack.leadingAnchor constraintEqualToAnchor:modifier_bar.leadingAnchor constant:6.0f],
++    [stack.trailingAnchor constraintEqualToAnchor:modifier_bar.trailingAnchor constant:-6.0f],
++  ]];
++  modifier_bar_stack = stack; /* Owned by `modifier_bar` (released below). */
++
++  UIButton *collapse = modifier_bar_button_create(
++      self, @"keyboard", @"Modifier Keys", MODIFIER_BAR_TAG_COLLAPSE);
++  [stack addArrangedSubview:collapse];
++  [stack setCustomSpacing:10.0f afterView:collapse];
++
++  NSString *const symbols[4] = {@"control", @"shift", @"option", @"command"};
++  NSString *const titles[4] = {@"Ctrl", @"Shift", @"Alt", @"Cmd"};
++  for (int i = 0; i < 4; i++) {
++    modifier_bar_buttons[i] = modifier_bar_button_create(self, symbols[i], titles[i], i);
++    [stack addArrangedSubview:modifier_bar_buttons[i]];
++  }
++  [stack setCustomSpacing:10.0f afterView:modifier_bar_buttons[3]];
++
++  UIButton *confirm = modifier_bar_button_create(
++      self, @"checkmark", @"Confirm", MODIFIER_BAR_TAG_CONFIRM);
++  UIButton *cancel = modifier_bar_button_create(
++      self, @"xmark", @"Cancel", MODIFIER_BAR_TAG_CANCEL);
++  [stack addArrangedSubview:confirm];
++  [stack addArrangedSubview:cancel];
++  [stack setCustomSpacing:10.0f afterView:cancel];
++
++  [stack addArrangedSubview:modifier_bar_button_create(self, nil, @"X", MODIFIER_BAR_TAG_AXIS_X)];
++  [stack addArrangedSubview:modifier_bar_button_create(self, nil, @"Y", MODIFIER_BAR_TAG_AXIS_Y)];
++  [stack addArrangedSubview:modifier_bar_button_create(self, nil, @"Z", MODIFIER_BAR_TAG_AXIS_Z)];
++  [stack release];
++
++  UIPanGestureRecognizer *drag = [[UIPanGestureRecognizer alloc]
++      initWithTarget:self
++              action:@selector(handleModifierBarDrag:)];
++  drag.maximumNumberOfTouches = 1;
++  [modifier_bar addGestureRecognizer:drag];
++  [drag release];
++
++  [self addSubview:modifier_bar];
++  [self layoutModifierBar];
++  [self updateModifierBar];
++}
++
++/* Size the bar to its content and keep it fully on screen. */
++- (void)layoutModifierBar
++{
++  if (!modifier_bar) {
++    return;
++  }
++  const bool first_layout = CGRectIsEmpty(modifier_bar.frame);
++  /* Measure the stack (pure auto-layout); the bar itself is frame-based. 6pt padding. */
++  const CGSize content = [modifier_bar_stack
++      systemLayoutSizeFittingSize:UILayoutFittingCompressedSize];
++  const CGSize size = CGSizeMake(content.width + 12.0f, content.height + 12.0f);
++  const CGRect area = self.bounds;
++  CGPoint center = first_layout ? CGPointMake(8.0f + size.width * 0.5f, CGRectGetMidY(area)) :
++                                  modifier_bar.center;
++  modifier_bar.bounds = CGRectMake(0.0f, 0.0f, size.width, size.height);
++  center.x = MAX(size.width * 0.5f, MIN(area.size.width - size.width * 0.5f, center.x));
++  center.y = MAX(size.height * 0.5f, MIN(area.size.height - size.height * 0.5f, center.y));
++  modifier_bar.center = center;
++  [self bringSubviewToFront:modifier_bar];
++}
++
++/* Refresh button highlights and the modifier mask reported to Blender. */
++- (void)updateModifierBar
++{
++  uint32_t mask = 0;
++  for (int i = 0; i < 4; i++) {
++    UIButton *button = modifier_bar_buttons[i];
++    switch (modifier_bar_state[i]) {
++      case 1: /* One-shot: Blender blue. */
++        button.backgroundColor = [UIColor colorWithRed:0.28f green:0.45f blue:0.80f alpha:1.0f];
++        break;
++      case 2: /* Locked: Blender orange. */
++        button.backgroundColor = [UIColor colorWithRed:0.93f green:0.52f blue:0.13f alpha:1.0f];
++        break;
++      default:
++        button.backgroundColor = UIColor.clearColor;
++        break;
++    }
++    if (modifier_bar_state[i] != 0) {
++      mask |= 1u << i;
++    }
++  }
++  ghost_ios_virtual_modifiers = mask;
++}
++
++- (void)pushModifierBarKey:(GHOST_TKey)key down:(bool)down utf8:(const char *)utf8
++{
++  /* Same targeting as hardware keys: the active window, so popups get them too. */
++  GHOST_IWindow *target = system->getWindowManager()->getActiveWindow();
++  if (!target) {
++    target = window;
++  }
++  system->pushEvent(new GHOST_EventKey(GHOST_GetMilliSeconds((GHOST_SystemHandle)system),
++                                       down ? GHOST_kEventKeyDown : GHOST_kEventKeyUp,
++                                       target,
++                                       key,
++                                       false,
++                                       utf8));
++}
++
++- (void)releaseOneShotModifiers
++{
++  bool changed = false;
++  for (int i = 0; i < 4; i++) {
++    if (modifier_bar_state[i] == 1) {
++      modifier_bar_state[i] = 0;
++      [self pushModifierBarKey:modifier_bar_keys[i] down:false utf8:nullptr];
++      changed = true;
++    }
++  }
++  if (changed) {
++    [self updateModifierBar];
++  }
++}
++
++- (void)handleModifierBarButton:(UIButton *)sender
++{
++  @synchronized(self) {
++    const NSInteger tag = sender.tag;
++
++    if (tag >= 0 && tag < 4) {
++      const int old_state = modifier_bar_state[tag];
++      const int new_state = (old_state + 1) % 3;
++      if (old_state == 0) {
++        [self pushModifierBarKey:modifier_bar_keys[tag] down:true utf8:nullptr];
++      }
++      else if (new_state == 0) {
++        [self pushModifierBarKey:modifier_bar_keys[tag] down:false utf8:nullptr];
++      }
++      modifier_bar_state[tag] = new_state;
++      [self updateModifierBar];
++      return;
++    }
++
++    if (tag == MODIFIER_BAR_TAG_COLLAPSE) {
++      modifier_bar_collapsed = !modifier_bar_collapsed;
++      for (UIView *view in modifier_bar_stack.arrangedSubviews) {
++        if (view != sender) {
++          view.hidden = modifier_bar_collapsed;
++        }
++      }
++      [modifier_bar layoutIfNeeded];
++      [self layoutModifierBar];
++      return;
++    }
++
++    GHOST_TKey key = GHOST_kKeyUnknown;
++    switch (tag) {
++      case MODIFIER_BAR_TAG_CONFIRM:
++        key = GHOST_kKeyEnter;
++        break;
++      case MODIFIER_BAR_TAG_CANCEL:
++        key = GHOST_kKeyEsc;
++        break;
++      case MODIFIER_BAR_TAG_AXIS_X:
++        key = GHOST_kKeyX;
++        break;
++      case MODIFIER_BAR_TAG_AXIS_Y:
++        key = GHOST_kKeyY;
++        break;
++      case MODIFIER_BAR_TAG_AXIS_Z:
++        key = GHOST_kKeyZ;
++        break;
++    }
++    if (key == GHOST_kKeyUnknown) {
++      return;
++    }
++
++    /* Letters carry their character (like hardware keys) for text/numeric input. */
++    char key_utf8[6] = {0};
++    const bool shift_held = modifier_bar_state[1] != 0;
++    const char *utf8 = ghost_key_to_utf8(key, shift_held, key_utf8) ? key_utf8 : nullptr;
++    [self pushModifierBarKey:key down:true utf8:utf8];
++    [self pushModifierBarKey:key down:false utf8:nullptr];
++    [self releaseOneShotModifiers];
++  }
++}
++
++- (void)handleModifierBarDrag:(UIPanGestureRecognizer *)sender
++{
++  const CGPoint delta = [sender translationInView:self];
++  [sender setTranslation:CGPointZero inView:self];
++  modifier_bar.center = CGPointMake(modifier_bar.center.x + delta.x,
++                                    modifier_bar.center.y + delta.y);
++  [self layoutModifierBar];
++}
++
++/** \} */
++
+ - (const char *)getLastKeyboardString
+ {
+   /* Lock access around keyboard handling events */
+diff --git a/scripts/startup/bl_ui/space_topbar.py b/scripts/startup/bl_ui/space_topbar.py
+index e4daf62b9..92d11e5bc 100644
+--- a/scripts/startup/bl_ui/space_topbar.py
++++ b/scripts/startup/bl_ui/space_topbar.py
+@@ -49,6 +49,15 @@ class TOPBAR_HT_upper_bar(Header):
+             layout.template_reports_banner()
+             layout.template_running_jobs()
+ 
++        # Tablet: undo/redo and open/save reachable without a keyboard
++        # (upstream tablet plan: "Scene Assembly" #166529, "Portfolio Review" #166024).
++        row = layout.row(align=True)
++        row.operator("ed.undo", text="", icon='LOOP_BACK')
++        row.operator("ed.redo", text="", icon='LOOP_FORWARDS')
++        row = layout.row(align=True)
++        row.operator("wm.open_mainfile", text="", icon='FILE_FOLDER')
++        row.operator("wm.save_mainfile", text="", icon='FILE_TICK')
++
+         # Active workspace view-layer is retrieved through window, not through workspace.
+         layout.template_ID(window, "scene", new="scene.new", unlink="scene.delete")
+ 
+diff --git a/scripts/startup/bl_ui/space_view3d.py b/scripts/startup/bl_ui/space_view3d.py
+index 8840d0f0d..b93f52521 100644
+--- a/scripts/startup/bl_ui/space_view3d.py
++++ b/scripts/startup/bl_ui/space_view3d.py
+@@ -1018,6 +1018,15 @@ class VIEW3D_HT_header(Header):
+ 
+         layout.separator_spacer()
+ 
++        # Tablet: touch access to search, navigation and view controls without a keyboard
++        # (upstream tablet plan: "Top Level Search" #165902, "Portfolio Review" #166024).
++        row = layout.row(align=True)
++        row.operator("wm.search_menu", text="", icon='VIEWZOOM')
++        row = layout.row(align=True)
++        row.operator("wm.call_menu_pie", text="", icon='VIEW3D').name = "VIEW3D_MT_view_pie"
++        row.operator("wm.call_menu_pie", text="", icon='SHADING_RENDERED').name = "VIEW3D_MT_shading_ex_pie"
++        row.operator("screen.screen_full_area", text="", icon='FULLSCREEN_ENTER').use_hide_panels = True
++
+         # Viewport Settings
+         layout.popover(
+             panel="VIEW3D_PT_object_type_visibility",
