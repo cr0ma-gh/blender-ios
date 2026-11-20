@@ -1123,10 +1123,10 @@ index df0c9fd..d21cd3a 100644
  #endif
  
 diff --git a/scripts/addons_core/bl_pkg/bl_extension_utils.py b/scripts/addons_core/bl_pkg/bl_extension_utils.py
-index d53fbb6..0c9feb6 100644
+index 56d26b7..8e1dc0a 100644
 --- a/scripts/addons_core/bl_pkg/bl_extension_utils.py
 +++ b/scripts/addons_core/bl_pkg/bl_extension_utils.py
-@@ -233,12 +233,69 @@ def blender_ext_cmd(python_args: Sequence[str]) -> Sequence[str]:
+@@ -220,12 +220,69 @@ def blender_ext_cmd(python_args: Sequence[str]) -> Sequence[str]:
  # Call JSON.
  #
  
@@ -1195,8 +1195,8 @@ index d53fbb6..0c9feb6 100644
 +
      cmd = [*blender_ext_cmd(python_args), *args, "--output-type=JSON_0"]
      # Note that the context-manager isn't used to wait until the process is finished as
-     # the function only finishes when `poll()` is not none, it's just used to ensure file-handles
-@@ -249,7 +306,13 @@ def command_output_from_json_0(
+     # the function only finishes when `poll()` is not none, it's just use to ensure file-handles
+@@ -236,7 +293,13 @@ def command_output_from_json_0(
      if sys.platform == "win32":
          creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
  
@@ -1212,10 +1212,10 @@ index d53fbb6..0c9feb6 100644
          assert stdout is not None
  
 diff --git a/scripts/addons_core/bl_pkg/cli/blender_ext.py b/scripts/addons_core/bl_pkg/cli/blender_ext.py
-index 78a26d9..3a02ed5 100644
+index 43e3588..ca05d58 100644
 --- a/scripts/addons_core/bl_pkg/cli/blender_ext.py
 +++ b/scripts/addons_core/bl_pkg/cli/blender_ext.py
-@@ -5621,6 +5621,9 @@ def msg_print_json_0(ty: str, data: PrimTypeOrSeq) -> bool:
+@@ -5626,6 +5626,9 @@ def msg_print_json_0(ty: str, data: PrimTypeOrSeq) -> bool:
  
  
  def msglog_from_args(args: argparse.Namespace) -> MessageLogger:
@@ -1225,7 +1225,7 @@ index 78a26d9..3a02ed5 100644
      # Will be None when running form Blender.
      output_type = getattr(args, "output_type", 'TEXT')
  
-@@ -5643,28 +5646,33 @@ def main(
+@@ -5648,31 +5651,36 @@ def main(
          args_internal: bool = True,
          args_extra_subcommands_fn: ArgsSubparseFn | None = None,
          prog: str | None = None,
@@ -1275,9 +1275,14 @@ index 78a26d9..3a02ed5 100644
 +            sys.stdout.write("{:s}\n".format(VERSION))
 +            return 0
  
+-    if (sys.platform == "win32") and (sys.version_info < (3, 12, 6)):
+-        _worlaround_win32_ssl_cert_failure()
++        if (sys.platform == "win32") and (sys.version_info < (3, 12, 6)):
++            _worlaround_win32_ssl_cert_failure()
+ 
      parser = argparse_create(
          args_internal=args_internal,
-@@ -5672,6 +5680,8 @@ def main(
+@@ -5680,6 +5688,8 @@ def main(
          prog=prog,
      )
      args = parser.parse_args(argv)

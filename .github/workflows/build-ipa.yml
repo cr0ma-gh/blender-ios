@@ -109,6 +109,41 @@ jobs:
           find blender/lib/ios_arm64 -name '*.dylib' \( -type f -o -type l \) -exec cp -fL {} "$LIBDST/" \; || true
           find "$APP" -name 'libpython*.dylib' -exec cp -fn {} "$LIBDST/" \; || true
 
+          # Fix Mach-O platform headers, framework paths (Accelerate), and ad-hoc sign all dylibs/so.
+          # Upstream precompiled numpy .so files have macOS platform=1 and point to macOS Accelerate paths,
+          # causing dyld aborts on iOS ("mach-o file, but is for macOS").
+          python3 - << 'EOF'
+import os, subprocess
+
+app = os.environ.get("APP", "")
+print(f"Scanning {app} for dynamic libraries and Python C-extensions...")
+count = 0
+for root, _, files in os.walk(app):
+    for f in files:
+        if f.endswith(".dylib") or f.endswith(".so"):
+            count += 1
+            path = os.path.join(root, f)
+            # 1. Fix Accelerate framework path if pointing to macOS Versions/A
+            subprocess.run([
+                "install_name_tool",
+                "-change",
+                "/System/Library/Frameworks/Accelerate.framework/Versions/A/Accelerate",
+                "/System/Library/Frameworks/Accelerate.framework/Accelerate",
+                path
+            ], capture_output=True)
+            # 2. Fix Mach-O platform tag to iOS (platform 2, minos 16.0, sdk 18.5)
+            subprocess.run([
+                "vtool",
+                "-set-build-version", "2", "16.0", "18.5",
+                "-replace", "-output", path, path
+            ], capture_output=True)
+            # 3. Ad-hoc codesign binary so iOS installd and sideloading signers accept it
+            subprocess.run([
+                "codesign", "--force", "--sign", "-", path
+            ], capture_output=True)
+print(f"Successfully processed and codesigned {count} .dylib/.so binaries.")
+EOF
+
           # iPad-Unofficial branding + iOS app icon (iOS ignores the .icns, so inject PNGs).
           bash overlay/build/apply_branding.sh "$APP" overlay/ios/icon/icon_1024.png
           codesign --force --deep --sign - "$APP" || true
