@@ -37,7 +37,8 @@ which applies cleanly on top of that commit.
   press start the native grab-pan modal (depth/zoom correct).
 - `source/blender/editors/interface/view2d/view2d_ops.cc` — enable middle-click-drag pan in UV /
   2D editors.
-- `build_files/cmake/platform/platform_apple.cmake` — Apple/iOS build configuration.
+- `CMakeLists.txt` — guard Python >= 3.13 check to allow Python 3.11 for iOS cross-compilation (`WITH_APPLE_CROSSPLATFORM`).
+- `build_files/cmake/platform/platform_apple.cmake` — Apple/iOS build configuration (Python 3.11 target library detection, host Python executable fallback, warn instead of fatal error for missing macOS precompiled libs).
 
 ### Branding (this distribution)
 - `release/ios/Blender.app/Info.plist`

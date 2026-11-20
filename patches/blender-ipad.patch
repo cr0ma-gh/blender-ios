@@ -1,5 +1,18 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index ff3b4c7..2e99471 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1504,7 +1504,7 @@ if(WITH_PYTHON)
+   # because UNIX will search for the old Python paths which may not exist.
+   # giving errors about missing paths before this case is met.
+   if(DEFINED PYTHON_VERSION)
+-    if("${PYTHON_VERSION}" VERSION_LESS "3.13")
++    if(NOT WITH_APPLE_CROSSPLATFORM AND "${PYTHON_VERSION}" VERSION_LESS "3.13")
+       message(
+         FATAL_ERROR
+         "At least Python 3.13 is required to build, but found Python ${PYTHON_VERSION}"
 diff --git a/build_files/cmake/platform/platform_apple.cmake b/build_files/cmake/platform/platform_apple.cmake
-index 79b1287..63e70ae 100644
+index 79b1287..eef900d 100644
 --- a/build_files/cmake/platform/platform_apple.cmake
 +++ b/build_files/cmake/platform/platform_apple.cmake
 @@ -181,7 +181,7 @@ if(WITH_APPLE_CROSSPLATFORM)
@@ -11,6 +24,101 @@ index 79b1287..63e70ae 100644
    endif()
  endif()
  if(FIRST_RUN)
+@@ -207,31 +207,26 @@ if(NOT WITH_APPLE_CROSSPLATFORM)
+   endif()
+ 
+ else()
+-  # When building for iOS we use the MacOS version of Python from the macos libs dir
++  # When building for iOS we use the precompiled libraries in lib/ios_arm64 (Python 3.11).
+   set(CROSSCOMPILE_HOST_LIBDIR "${CMAKE_SOURCE_DIR}/lib/macos_arm64")
+-  if(NOT PYTHON_VERSION)
+-    set(PYTHON_VERSION 3.13)
+-    # IOS_FIXME: This is not great why is PYTHON_VERSION not defined here?
+-    message("WARNING Manually defining Python Version to 3.13 for iOS build")
++  set(PYTHON_VERSION 3.11 CACHE STRING "Python Version (major and minor only)" FORCE)
++  if(EXISTS "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python${PYTHON_VERSION}")
++    set(PYTHON_EXECUTABLE "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python${PYTHON_VERSION}")
++  elseif(EXISTS "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python3.13")
+     set(PYTHON_EXECUTABLE "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python3.13")
+   else()
+-    set(PYTHON_EXECUTABLE "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python${PYTHON_VERSION}")
++    find_program(PYTHON_EXECUTABLE "python3")
+   endif()
+ 
++  set(PYTHON_ROOT_DIR "${LIBDIR}/python")
+   set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python${PYTHON_VERSION}")
++  set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python${PYTHON_VERSION}")
+   set(PYTHON_LIBPATH "${LIBDIR}/python/lib")
++  set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython${PYTHON_VERSION}.a")
++  set(PYTHON_LIBRARIES "${LIBDIR}/python/lib/libpython${PYTHON_VERSION}.a")
+ 
+-  set(PYTHON_LIBRARIES
+-    "${LIBDIR}/python/lib/libpython${PYTHON_VERSION}.a"
+-  )
+-
+-  if(NOT EXISTS ${PYTHON_EXECUTABLE})
+-    message(
+-      FATAL_ERROR
+-      "Missing: <${PYTHON_EXECUTABLE}>\n"
+-      "MacOS version of Python must exist to build iOS version\n"
+-	  "Try building MacOS version first: 'make update' or 'make deps'\n"
+-    )
++  if(NOT EXISTS "${PYTHON_EXECUTABLE}")
++    find_program(PYTHON_EXECUTABLE "python3")
+   endif()
+ 
+   message(STATUS "HOST PYTHON EXECUTABLE: ${PYTHON_EXECUTABLE}")
+diff --git a/intern/ghost/intern/GHOST_SystemIOS.mm b/intern/ghost/intern/GHOST_SystemIOS.mm
+index 1937de8..05a0006 100644
+--- a/intern/ghost/intern/GHOST_SystemIOS.mm
++++ b/intern/ghost/intern/GHOST_SystemIOS.mm
+@@ -55,6 +55,18 @@ int main_ios_callback(int argc, const char **argv);
+ - (BOOL)application:(UIApplication *)application
+     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
+ {
++  @autoreleasepool {
++    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
++    if ([paths count] > 0) {
++      NSString *docs = [paths objectAtIndex:0];
++      NSString *addonsPath = [docs stringByAppendingPathComponent:@"scripts/addons"];
++      [[NSFileManager defaultManager] createDirectoryAtPath:addonsPath
++                                withIntermediateDirectories:YES
++                                                 attributes:nil
++                                                      error:nil];
++    }
++  }
++
+   main_ios_callback(argc, argv);
+ 
+   return YES;
+@@ -66,7 +78,12 @@ int main_ios_callback(int argc, const char **argv);
+ {
+   GHOST_SystemIOS *system = static_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
+ 
+-  system->handleOpenDocumentRequest(url.path);
++  if (url) {
++    [url startAccessingSecurityScopedResource];
++    if (system) {
++      system->handleOpenDocumentRequest(url.path);
++    }
++  }
+ 
+   return YES;
+ }
+@@ -903,7 +920,12 @@ bool GHOST_SystemIOS::handleOpenDocumentRequest(void *filepathStr)
+ 
+   @autoreleasepool {
+     if (!current_active_window_) {
+-      return NO;
++      if (window_manager_ && window_manager_->getActiveWindow()) {
++        current_active_window_ = (GHOST_WindowIOS *)window_manager_->getActiveWindow();
++      }
++      else {
++        return NO;
++      }
+     }
+ 
+     /* Discard event if we are in cursor grab sequence,
 diff --git a/intern/ghost/intern/GHOST_WindowIOS.mm b/intern/ghost/intern/GHOST_WindowIOS.mm
 index 56d2ffa..afca91d 100644
 --- a/intern/ghost/intern/GHOST_WindowIOS.mm
@@ -882,246 +990,6 @@ index e478b5b..521a2c4 100644
  			<key>UTTypeDescription</key>
  			<string>Blender File</string>
  			<key>UTTypeIcons</key>
-diff --git a/source/blender/editors/interface/view2d/view2d_ops.cc b/source/blender/editors/interface/view2d/view2d_ops.cc
-index fcdb16f..53ab27a 100644
---- a/source/blender/editors/interface/view2d/view2d_ops.cc
-+++ b/source/blender/editors/interface/view2d/view2d_ops.cc
-@@ -234,12 +234,13 @@ static wmOperatorStatus view_pan_exec(bContext *C, wmOperator *op)
- static wmOperatorStatus view_pan_invoke(bContext *C, wmOperator *op, const wmEvent *event)
- {
- #ifdef WITH_APPLE_CROSSPLATFORM
--  ScrArea *area = CTX_wm_area(C);
--  ARegion *region = CTX_wm_region(C);
--  /* Only scroll the File/Asset Browser and Asset Shelf views with multiple finger on iOS. */
--  if ((area->spacetype == SPACE_FILE || region->regiontype == RGN_TYPE_ASSET_SHELF) &&
--      !(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS))
--  {
-+  /* On iOS only a two-finger trackpad pan (MOUSEPAN, numFingers==2) may pan/scroll
-+   * a 2D view. A plain MIDDLEMOUSE press must NOT start a modal pan: it cannot be
-+   * driven without continuous cursor-move events on iPad, and starting it would
-+   * block the trackpad pan. This lets external-mouse middle-drag (delivered as a
-+   * 2-finger TRACKPADPAN) pan the UV/Image and other 2D editors, matching the 3D
-+   * viewport's behaviour. */
-+  if (!(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
-     return OPERATOR_FINISHED;
-   }
- #endif
-diff --git a/source/blender/editors/space_view3d/view3d_navigate_view_move.cc b/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
-index 0a41edf..d80985f 100644
---- a/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
-+++ b/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
-@@ -108,8 +108,12 @@ static wmOperatorStatus viewmove_invoke_impl(bContext *C,
- static wmOperatorStatus viewmove_invoke(bContext *C, wmOperator *op, const wmEvent *event)
- {
- #ifdef WITH_APPLE_CROSSPLATFORM
--  /* Only handle inverted events for 3D view interaction on iOS */
--  if (!(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
-+  /* iOS: a real MIDDLEMOUSE press (external mouse) starts the modal grab-pan,
-+   * driven by CURSOR_MOVE events — this pins the grabbed point exactly (depth and
-+   * zoom correct), unlike the zoom-amplified one-shot TRACKPADPAN path. Two-finger
-+   * trackpad pans (MOUSEPAN) still use the one-shot path; other non-two-finger
-+   * events (e.g. touch) are ignored. */
-+  if (event->type != MIDDLEMOUSE && !(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
-     return OPERATOR_FINISHED;
-   }
- #endif
-diff --git a/intern/ghost/intern/GHOST_SystemIOS.mm b/intern/ghost/intern/GHOST_SystemIOS.mm
-index 1937de8..05a0006 100644
---- a/intern/ghost/intern/GHOST_SystemIOS.mm
-+++ b/intern/ghost/intern/GHOST_SystemIOS.mm
-@@ -55,6 +55,18 @@ int main_ios_callback(int argc, const char **argv);
- - (BOOL)application:(UIApplication *)application
-     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
- {
-+  @autoreleasepool {
-+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-+    if ([paths count] > 0) {
-+      NSString *docs = [paths objectAtIndex:0];
-+      NSString *addonsPath = [docs stringByAppendingPathComponent:@"scripts/addons"];
-+      [[NSFileManager defaultManager] createDirectoryAtPath:addonsPath
-+                                withIntermediateDirectories:YES
-+                                                 attributes:nil
-+                                                      error:nil];
-+    }
-+  }
-+
-   main_ios_callback(argc, argv);
- 
-   return YES;
-@@ -66,7 +78,12 @@ int main_ios_callback(int argc, const char **argv);
- {
-   GHOST_SystemIOS *system = static_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
- 
--  system->handleOpenDocumentRequest(url.path);
-+  if (url) {
-+    [url startAccessingSecurityScopedResource];
-+    if (system) {
-+      system->handleOpenDocumentRequest(url.path);
-+    }
-+  }
- 
-   return YES;
- }
-@@ -903,7 +920,12 @@ bool GHOST_SystemIOS::handleOpenDocumentRequest(void *filepathStr)
- 
-   @autoreleasepool {
-     if (!current_active_window_) {
--      return NO;
-+      if (window_manager_ && window_manager_->getActiveWindow()) {
-+        current_active_window_ = (GHOST_WindowIOS *)window_manager_->getActiveWindow();
-+      }
-+      else {
-+        return NO;
-+      }
-     }
- 
-     /* Discard event if we are in cursor grab sequence,
-diff --git a/source/blender/blenkernel/intern/appdir.cc b/source/blender/blenkernel/intern/appdir.cc
-index 57bfc96..2587166 100644
---- a/source/blender/blenkernel/intern/appdir.cc
-+++ b/source/blender/blenkernel/intern/appdir.cc
-@@ -138,7 +138,13 @@ static char *blender_version_decimal(const int version)
- 
- const char *BKE_appdir_folder_default()
- {
--#ifndef WIN32
-+#ifdef WITH_APPLE_CROSSPLATFORM
-+  static char documentfolder[FILE_MAXDIR];
-+  if (BKE_appdir_folder_documents(documentfolder)) {
-+    return documentfolder;
-+  }
-+  return BLI_dir_home();
-+#elif !defined(WIN32)
-   return BLI_dir_home();
- #else  /* Windows */
-   static char documentfolder[FILE_MAXDIR];
-@@ -182,10 +188,12 @@ const char *BKE_appdir_folder_default_or_root()
- const char *BKE_appdir_folder_home()
- {
- #ifdef WITH_APPLE_CROSSPLATFORM
--  return BKE_appdir_folder_default_or_root();
--#else
--  return BLI_dir_home();
-+  static char documentfolder[FILE_MAXDIR];
-+  if (BKE_appdir_folder_documents(documentfolder)) {
-+    return documentfolder;
-+  }
- #endif
-+  return BLI_dir_home();
- }
- 
- bool BKE_appdir_folder_documents(char *dir)
-@@ -694,6 +702,16 @@ bool BKE_appdir_folder_id_ex(const int folder_id,
-       if (get_path_environment(path, path_maxncpy, subfolder, "BLENDER_USER_SCRIPTS")) {
-         break;
-       }
-+#ifdef WITH_APPLE_CROSSPLATFORM
-+      {
-+        char docdir[FILE_MAXDIR];
-+        if (BKE_appdir_folder_documents(docdir)) {
-+          if (test_path(path, path_maxncpy, true, docdir, "scripts", subfolder)) {
-+            break;
-+          }
-+        }
-+      }
-+#endif
-       if (get_path_user(path, path_maxncpy, "scripts", subfolder)) {
-         break;
-       }
-@@ -717,6 +735,16 @@ bool BKE_appdir_folder_id_ex(const int folder_id,
-       if (get_path_environment(path, path_maxncpy, subfolder, "BLENDER_USER_EXTENSIONS")) {
-         break;
-       }
-+#ifdef WITH_APPLE_CROSSPLATFORM
-+      {
-+        char docdir[FILE_MAXDIR];
-+        if (BKE_appdir_folder_documents(docdir)) {
-+          if (test_path(path, path_maxncpy, true, docdir, "extensions", subfolder)) {
-+            break;
-+          }
-+        }
-+      }
-+#endif
-       if (get_path_user(path, path_maxncpy, "extensions", subfolder)) {
-         break;
-       }
-@@ -798,6 +826,16 @@ std::optional<std::string> BKE_appdir_folder_id_user_notest(const int folder_id,
-       {
-         break;
-       }
-+#ifdef WITH_APPLE_CROSSPLATFORM
-+      {
-+        char docdir[FILE_MAXDIR];
-+        if (BKE_appdir_folder_documents(docdir)) {
-+          if (test_path(path, sizeof(path), check_is_dir, docdir, "scripts", subfolder)) {
-+            break;
-+          }
-+        }
-+      }
-+#endif
-       get_path_user_ex(path, sizeof(path), "scripts", subfolder, version, check_is_dir);
-       break;
-     case BLENDER_USER_EXTENSIONS:
-@@ -806,6 +844,16 @@ std::optional<std::string> BKE_appdir_folder_id_user_notest(const int folder_id,
-       {
-         break;
-       }
-+#ifdef WITH_APPLE_CROSSPLATFORM
-+      {
-+        char docdir[FILE_MAXDIR];
-+        if (BKE_appdir_folder_documents(docdir)) {
-+          if (test_path(path, sizeof(path), check_is_dir, docdir, "extensions", subfolder)) {
-+            break;
-+          }
-+        }
-+      }
-+#endif
-       get_path_user_ex(path, sizeof(path), "extensions", subfolder, version, check_is_dir);
-       break;
-     default:
-diff --git a/source/blender/blenlib/intern/storage_apple.mm b/source/blender/blenlib/intern/storage_apple.mm
-index fabca91..745bc2a 100644
---- a/source/blender/blenlib/intern/storage_apple.mm
-+++ b/source/blender/blenlib/intern/storage_apple.mm
-@@ -188,7 +188,8 @@ char *BLI_current_working_dir(char *dir, const size_t maxncpy)
-   char path_expanded[PATH_MAX];
-   @autoreleasepool {
- #ifdef WITH_APPLE_CROSSPLATFORM
--    NSString *path = [[NSBundle mainBundle] bundlePath];
-+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-+    NSString *path = [paths count] > 0 ? [paths objectAtIndex:0] : [[NSBundle mainBundle] bundlePath];
- #else
-     NSString *path = [[NSFileManager defaultManager] currentDirectoryPath];
- #endif
-diff --git a/source/blender/editors/space_file/fsmenu_system.mm b/source/blender/editors/space_file/fsmenu_system.mm
-index df0c9fd..d21cd3a 100644
---- a/source/blender/editors/space_file/fsmenu_system.mm
-+++ b/source/blender/editors/space_file/fsmenu_system.mm
-@@ -206,7 +206,7 @@ void fsmenu_read_system(struct FSMenu *fsmenu, int read_bookmarks)
-                                                                   inDomains:NSUserDomainMask]
-         firstObject];
- 
--    BLI_snprintf(line, sizeof(line), "%s", [[ipad_doc_url path] UTF8String]);
-+    BLI_snprintf(line, sizeof(line), "%s/", [[ipad_doc_url path] UTF8String]);
-     fsmenu_insert_entry(fsmenu,
-                         FS_CATEGORY_SYSTEM_BOOKMARKS,
-                         line,
-@@ -216,6 +216,7 @@ void fsmenu_read_system(struct FSMenu *fsmenu, int read_bookmarks)
-     UNUSED_VARS(read_bookmarks);
- #  endif
- 
-+#  ifndef WITH_APPLE_CROSSPLATFORM
-     /* Get mounted volumes better method OSX 10.6 and higher, see:
-      * https://developer.apple.com/library/mac/#documentation/CoreFoundation/Reference/CFURLRef/Reference/reference.html
-      */
-@@ -273,6 +274,7 @@ void fsmenu_read_system(struct FSMenu *fsmenu, int read_bookmarks)
-     }
- 
-     CFRelease(volEnum);
-+#  endif
-   }
- #endif
- 
 diff --git a/scripts/addons_core/bl_pkg/bl_extension_utils.py b/scripts/addons_core/bl_pkg/bl_extension_utils.py
 index d53fbb6..0c9feb6 100644
 --- a/scripts/addons_core/bl_pkg/bl_extension_utils.py
@@ -1286,3 +1154,192 @@ index 78a26d9..3a02ed5 100644
      # Call sub-parser callback.
      if not hasattr(args, "func"):
          parser.print_help()
+diff --git a/source/blender/blenkernel/intern/appdir.cc b/source/blender/blenkernel/intern/appdir.cc
+index 57bfc96..2587166 100644
+--- a/source/blender/blenkernel/intern/appdir.cc
++++ b/source/blender/blenkernel/intern/appdir.cc
+@@ -138,7 +138,13 @@ static char *blender_version_decimal(const int version)
+ 
+ const char *BKE_appdir_folder_default()
+ {
+-#ifndef WIN32
++#ifdef WITH_APPLE_CROSSPLATFORM
++  static char documentfolder[FILE_MAXDIR];
++  if (BKE_appdir_folder_documents(documentfolder)) {
++    return documentfolder;
++  }
++  return BLI_dir_home();
++#elif !defined(WIN32)
+   return BLI_dir_home();
+ #else  /* Windows */
+   static char documentfolder[FILE_MAXDIR];
+@@ -182,10 +188,12 @@ const char *BKE_appdir_folder_default_or_root()
+ const char *BKE_appdir_folder_home()
+ {
+ #ifdef WITH_APPLE_CROSSPLATFORM
+-  return BKE_appdir_folder_default_or_root();
+-#else
+-  return BLI_dir_home();
++  static char documentfolder[FILE_MAXDIR];
++  if (BKE_appdir_folder_documents(documentfolder)) {
++    return documentfolder;
++  }
+ #endif
++  return BLI_dir_home();
+ }
+ 
+ bool BKE_appdir_folder_documents(char *dir)
+@@ -694,6 +702,16 @@ bool BKE_appdir_folder_id_ex(const int folder_id,
+       if (get_path_environment(path, path_maxncpy, subfolder, "BLENDER_USER_SCRIPTS")) {
+         break;
+       }
++#ifdef WITH_APPLE_CROSSPLATFORM
++      {
++        char docdir[FILE_MAXDIR];
++        if (BKE_appdir_folder_documents(docdir)) {
++          if (test_path(path, path_maxncpy, true, docdir, "scripts", subfolder)) {
++            break;
++          }
++        }
++      }
++#endif
+       if (get_path_user(path, path_maxncpy, "scripts", subfolder)) {
+         break;
+       }
+@@ -717,6 +735,16 @@ bool BKE_appdir_folder_id_ex(const int folder_id,
+       if (get_path_environment(path, path_maxncpy, subfolder, "BLENDER_USER_EXTENSIONS")) {
+         break;
+       }
++#ifdef WITH_APPLE_CROSSPLATFORM
++      {
++        char docdir[FILE_MAXDIR];
++        if (BKE_appdir_folder_documents(docdir)) {
++          if (test_path(path, path_maxncpy, true, docdir, "extensions", subfolder)) {
++            break;
++          }
++        }
++      }
++#endif
+       if (get_path_user(path, path_maxncpy, "extensions", subfolder)) {
+         break;
+       }
+@@ -798,6 +826,16 @@ std::optional<std::string> BKE_appdir_folder_id_user_notest(const int folder_id,
+       {
+         break;
+       }
++#ifdef WITH_APPLE_CROSSPLATFORM
++      {
++        char docdir[FILE_MAXDIR];
++        if (BKE_appdir_folder_documents(docdir)) {
++          if (test_path(path, sizeof(path), check_is_dir, docdir, "scripts", subfolder)) {
++            break;
++          }
++        }
++      }
++#endif
+       get_path_user_ex(path, sizeof(path), "scripts", subfolder, version, check_is_dir);
+       break;
+     case BLENDER_USER_EXTENSIONS:
+@@ -806,6 +844,16 @@ std::optional<std::string> BKE_appdir_folder_id_user_notest(const int folder_id,
+       {
+         break;
+       }
++#ifdef WITH_APPLE_CROSSPLATFORM
++      {
++        char docdir[FILE_MAXDIR];
++        if (BKE_appdir_folder_documents(docdir)) {
++          if (test_path(path, sizeof(path), check_is_dir, docdir, "extensions", subfolder)) {
++            break;
++          }
++        }
++      }
++#endif
+       get_path_user_ex(path, sizeof(path), "extensions", subfolder, version, check_is_dir);
+       break;
+     default:
+diff --git a/source/blender/blenlib/intern/storage_apple.mm b/source/blender/blenlib/intern/storage_apple.mm
+index fabca91..745bc2a 100644
+--- a/source/blender/blenlib/intern/storage_apple.mm
++++ b/source/blender/blenlib/intern/storage_apple.mm
+@@ -188,7 +188,8 @@ char *BLI_current_working_dir(char *dir, const size_t maxncpy)
+   char path_expanded[PATH_MAX];
+   @autoreleasepool {
+ #ifdef WITH_APPLE_CROSSPLATFORM
+-    NSString *path = [[NSBundle mainBundle] bundlePath];
++    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
++    NSString *path = [paths count] > 0 ? [paths objectAtIndex:0] : [[NSBundle mainBundle] bundlePath];
+ #else
+     NSString *path = [[NSFileManager defaultManager] currentDirectoryPath];
+ #endif
+diff --git a/source/blender/editors/interface/view2d/view2d_ops.cc b/source/blender/editors/interface/view2d/view2d_ops.cc
+index fcdb16f..53ab27a 100644
+--- a/source/blender/editors/interface/view2d/view2d_ops.cc
++++ b/source/blender/editors/interface/view2d/view2d_ops.cc
+@@ -234,12 +234,13 @@ static wmOperatorStatus view_pan_exec(bContext *C, wmOperator *op)
+ static wmOperatorStatus view_pan_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+ {
+ #ifdef WITH_APPLE_CROSSPLATFORM
+-  ScrArea *area = CTX_wm_area(C);
+-  ARegion *region = CTX_wm_region(C);
+-  /* Only scroll the File/Asset Browser and Asset Shelf views with multiple finger on iOS. */
+-  if ((area->spacetype == SPACE_FILE || region->regiontype == RGN_TYPE_ASSET_SHELF) &&
+-      !(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS))
+-  {
++  /* On iOS only a two-finger trackpad pan (MOUSEPAN, numFingers==2) may pan/scroll
++   * a 2D view. A plain MIDDLEMOUSE press must NOT start a modal pan: it cannot be
++   * driven without continuous cursor-move events on iPad, and starting it would
++   * block the trackpad pan. This lets external-mouse middle-drag (delivered as a
++   * 2-finger TRACKPADPAN) pan the UV/Image and other 2D editors, matching the 3D
++   * viewport's behaviour. */
++  if (!(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
+     return OPERATOR_FINISHED;
+   }
+ #endif
+diff --git a/source/blender/editors/space_file/fsmenu_system.mm b/source/blender/editors/space_file/fsmenu_system.mm
+index df0c9fd..d21cd3a 100644
+--- a/source/blender/editors/space_file/fsmenu_system.mm
++++ b/source/blender/editors/space_file/fsmenu_system.mm
+@@ -206,7 +206,7 @@ void fsmenu_read_system(struct FSMenu *fsmenu, int read_bookmarks)
+                                                                   inDomains:NSUserDomainMask]
+         firstObject];
+ 
+-    BLI_snprintf(line, sizeof(line), "%s", [[ipad_doc_url path] UTF8String]);
++    BLI_snprintf(line, sizeof(line), "%s/", [[ipad_doc_url path] UTF8String]);
+     fsmenu_insert_entry(fsmenu,
+                         FS_CATEGORY_SYSTEM_BOOKMARKS,
+                         line,
+@@ -216,6 +216,7 @@ void fsmenu_read_system(struct FSMenu *fsmenu, int read_bookmarks)
+     UNUSED_VARS(read_bookmarks);
+ #  endif
+ 
++#  ifndef WITH_APPLE_CROSSPLATFORM
+     /* Get mounted volumes better method OSX 10.6 and higher, see:
+      * https://developer.apple.com/library/mac/#documentation/CoreFoundation/Reference/CFURLRef/Reference/reference.html
+      */
+@@ -273,6 +274,7 @@ void fsmenu_read_system(struct FSMenu *fsmenu, int read_bookmarks)
+     }
+ 
+     CFRelease(volEnum);
++#  endif
+   }
+ #endif
+ 
+diff --git a/source/blender/editors/space_view3d/view3d_navigate_view_move.cc b/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
+index 0a41edf..d80985f 100644
+--- a/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
++++ b/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
+@@ -108,8 +108,12 @@ static wmOperatorStatus viewmove_invoke_impl(bContext *C,
+ static wmOperatorStatus viewmove_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+ {
+ #ifdef WITH_APPLE_CROSSPLATFORM
+-  /* Only handle inverted events for 3D view interaction on iOS */
+-  if (!(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
++  /* iOS: a real MIDDLEMOUSE press (external mouse) starts the modal grab-pan,
++   * driven by CURSOR_MOVE events — this pins the grabbed point exactly (depth and
++   * zoom correct), unlike the zoom-amplified one-shot TRACKPADPAN path. Two-finger
++   * trackpad pans (MOUSEPAN) still use the one-shot path; other non-two-finger
++   * events (e.g. touch) are ignored. */
++  if (event->type != MIDDLEMOUSE && !(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
+     return OPERATOR_FINISHED;
+   }
+ #endif
