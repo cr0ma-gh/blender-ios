@@ -1122,3 +1122,167 @@ index df0c9fd..d21cd3a 100644
    }
  #endif
  
+diff --git a/scripts/addons_core/bl_pkg/bl_extension_utils.py b/scripts/addons_core/bl_pkg/bl_extension_utils.py
+index d53fbb6..0c9feb6 100644
+--- a/scripts/addons_core/bl_pkg/bl_extension_utils.py
++++ b/scripts/addons_core/bl_pkg/bl_extension_utils.py
+@@ -233,12 +233,69 @@ def blender_ext_cmd(python_args: Sequence[str]) -> Sequence[str]:
+ # Call JSON.
+ #
+ 
++def _command_output_in_process(
++        args: Sequence[str],
++        use_idle: bool,
++) -> Generator[InfoItemSeq, bool, None]:
++    import queue
++    import threading
++    from .cli import blender_ext
++
++    msg_queue: queue.Queue = queue.Queue()
++    done_event = threading.Event()
++    blender_ext.REQUEST_EXIT = False
++
++    def msg_callback(ty: str, data: Any) -> bool:
++        msg_queue.put((ty, data))
++        return blender_ext.REQUEST_EXIT
++
++    def thread_main():
++        try:
++            blender_ext.main(
++                list(args),
++                args_internal=True,
++                msg_fn=msg_callback,
++            )
++        except Exception as ex:
++            import traceback
++            traceback.print_exc()
++            msg_queue.put(("ERROR", str(ex)))
++        finally:
++            done_event.set()
++
++    t = threading.Thread(target=thread_main, daemon=True)
++    t.start()
++
++    while True:
++        json_messages = []
++        while not msg_queue.empty():
++            try:
++                json_messages.append(msg_queue.get_nowait())
++            except queue.Empty:
++                break
++
++        if not json_messages and done_event.is_set() and msg_queue.empty():
++            break
++
++        if not json_messages and use_idle:
++            time.sleep(IDLE_WAIT_ON_READ)
++
++        request_exit = yield json_messages
++        if request_exit:
++            blender_ext.REQUEST_EXIT = True
++
++
+ def command_output_from_json_0(
+         args: Sequence[str],
+         use_idle: bool,
+         *,
+         python_args: Sequence[str],
+ ) -> Generator[InfoItemSeq, bool, None]:
++    # On iOS (and platforms where subprocesses cannot be spawned), run in-process using threads.
++    if sys.platform == "ios" or not hasattr(os, "fork"):
++        yield from _command_output_in_process(args, use_idle)
++        return
++
+     cmd = [*blender_ext_cmd(python_args), *args, "--output-type=JSON_0"]
+     # Note that the context-manager isn't used to wait until the process is finished as
+     # the function only finishes when `poll()` is not none, it's just used to ensure file-handles
+@@ -249,7 +306,13 @@ def command_output_from_json_0(
+     if sys.platform == "win32":
+         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+ 
+-    with subprocess.Popen(cmd, stdout=subprocess.PIPE, creationflags=creationflags) as ps:
++    try:
++        ps = subprocess.Popen(cmd, stdout=subprocess.PIPE, creationflags=creationflags)
++    except (PermissionError, OSError):
++        yield from _command_output_in_process(args, use_idle)
++        return
++
++    with ps:
+         stdout = ps.stdout
+         assert stdout is not None
+ 
+diff --git a/scripts/addons_core/bl_pkg/cli/blender_ext.py b/scripts/addons_core/bl_pkg/cli/blender_ext.py
+index 78a26d9..3a02ed5 100644
+--- a/scripts/addons_core/bl_pkg/cli/blender_ext.py
++++ b/scripts/addons_core/bl_pkg/cli/blender_ext.py
+@@ -5621,6 +5621,9 @@ def msg_print_json_0(ty: str, data: PrimTypeOrSeq) -> bool:
+ 
+ 
+ def msglog_from_args(args: argparse.Namespace) -> MessageLogger:
++    if getattr(args, "msg_fn", None) is not None:
++        return MessageLogger(args.msg_fn)
++
+     # Will be None when running form Blender.
+     output_type = getattr(args, "output_type", 'TEXT')
+ 
+@@ -5643,28 +5646,33 @@ def main(
+         args_internal: bool = True,
+         args_extra_subcommands_fn: ArgsSubparseFn | None = None,
+         prog: str | None = None,
++        msg_fn: MessageFn | None = None,
+ ) -> int:
+     # NOTE: only manipulate Python's run-time such as encoding & SIGINT when running stand-alone.
+ 
+-    # Run early to prevent a `KeyboardInterrupt` exception.
+-    signal.signal(signal.SIGINT, signal_handler_sigint)
+-    if sys.platform == "win32":
+-        # WIN32 needs to check for break as sending SIGINT isn't supported from the caller, see #131947.
+-        signal.signal(signal.SIGBREAK, signal_handler_sigint)
+-
+-    # Needed on WIN32 which doesn't default to `utf-8`.
+-    for fh in (sys.stdout, sys.stderr):
+-        # While this is typically the case, is only guaranteed to be `TextIO` so check `reconfigure` is available.
+-        if not isinstance(fh, io.TextIOWrapper):
+-            continue
+-        # pylint: disable-next=no-member; False positive.
+-        if fh.encoding.lower().partition(":")[0] == "utf-8":
+-            continue
+-        fh.reconfigure(encoding="utf-8")
++    if msg_fn is None:
++        # Run early to prevent a `KeyboardInterrupt` exception.
++        try:
++            signal.signal(signal.SIGINT, signal_handler_sigint)
++            if sys.platform == "win32":
++                # WIN32 needs to check for break as sending SIGINT isn't supported from the caller, see #131947.
++                signal.signal(signal.SIGBREAK, signal_handler_sigint)
++        except (ValueError, AttributeError):
++            pass
++
++        # Needed on WIN32 which doesn't default to `utf-8`.
++        for fh in (sys.stdout, sys.stderr):
++            # While this is typically the case, is only guaranteed to be `TextIO` so check `reconfigure` is available.
++            if not isinstance(fh, io.TextIOWrapper):
++                continue
++            # pylint: disable-next=no-member; False positive.
++            if fh.encoding.lower().partition(":")[0] == "utf-8":
++                continue
++            fh.reconfigure(encoding="utf-8")
+ 
+-    if "--version" in sys.argv:
+-        sys.stdout.write("{:s}\n".format(VERSION))
+-        return 0
++        if "--version" in sys.argv:
++            sys.stdout.write("{:s}\n".format(VERSION))
++            return 0
+ 
+     parser = argparse_create(
+         args_internal=args_internal,
+@@ -5672,6 +5680,8 @@ def main(
+         prog=prog,
+     )
+     args = parser.parse_args(argv)
++    if msg_fn is not None:
++        args.msg_fn = msg_fn
+     # Call sub-parser callback.
+     if not hasattr(args, "func"):
+         parser.print_help()
