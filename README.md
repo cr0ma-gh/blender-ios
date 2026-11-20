@@ -72,7 +72,9 @@ Download the latest `.ipa` from the [Releases](../../releases) page. Each releas
 (both Blender 5.0):
 
 - `Blender-iPad-Unofficial-tablet.ipa` — includes the new touch/tablet UI from upstream's
-  `ios-workshop` branch (touch-friendly menu behavior, experimental editor dock).
+  `ios-workshop` branch (touch-friendly menu behavior, experimental editor dock) plus a few
+  later UI improvements backported from Blender `main` (Quad View resizing by dragging,
+  finer number-field arrows, hold-a-key temporary tool switching).
 - `Blender-iPad-Unofficial-legacy.ipa` — the plain upstream `ios` branch UI.
 
 | Method | Needs a Mac? | Re-sign interval | iPadOS 26.5 |
@@ -90,7 +92,9 @@ You do **not** need a local Mac if you use the GitHub Actions workflow (cloud ma
 see [.github/workflows/build-ipa.yml](.github/workflows/build-ipa.yml). To build locally on a
 Mac, see **[BUILD.md](BUILD.md)**. The complete corresponding source is: Blender upstream `ios`
 branch at the pinned commit + [patches/blender-ipad.patch](patches/blender-ipad.patch)
-(+ [patches/tablet-ui.patch](patches/tablet-ui.patch) for the `tablet` build).
+(+ [patches/tablet-ui.patch](patches/tablet-ui.patch) and
+[patches/tablet-ui-backports.patch](patches/tablet-ui-backports.patch) for the `tablet` build).
+The app keeps Blender's original name, icon and bundle identifier.
 
 ## 📄 License
 

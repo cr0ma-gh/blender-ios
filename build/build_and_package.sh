@@ -34,8 +34,8 @@ if [ ! -f "$APP_DIR/Blender.app/Blender" ]; then
   exit 1
 fi
 
-echo "==> [2/3] Applying branding + iOS app icon (iOS ignores the .icns, so PNGs are injected)…"
-bash "$SCRIPT_DIR/apply_branding.sh" "$APP_DIR/Blender.app" "$SCRIPT_DIR/../ios/icon/icon_1024.png"
+echo "==> [2/3] Applying iOS app icon from Blender's official .icns (iOS ignores .icns, so PNGs are injected)…"
+bash "$SCRIPT_DIR/prepare_ios_bundle.sh" "$APP_DIR/Blender.app"
 python3 "$SCRIPT_DIR/fix_macho.py" "$APP_DIR/Blender.app"
 
 echo "==> [3/3] Repackaging .ipa (don't skip — otherwise the old app installs)…"

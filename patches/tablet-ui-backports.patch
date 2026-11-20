@@ -1,0 +1,768 @@
+From ae5a988f58a19918e67a66248e8c5f7f0b345e6a Mon Sep 17 00:00:00 2001
+From: Harley Acheson <harley.acheson@gmail.com>
+Date: Sat, 29 Nov 2025 18:35:54 +0100
+Subject: [PATCH 1/3] UI: Quad View Resizing
+
+This PR allows resizing of the Quad View quadrants by dragging from the
+center point. This creates a new action zone type of AZONE_REGION_QUAD
+for this purpose. Snapping to 12ths by holding down Ctrl.
+
+Pull Request: https://projects.blender.org/blender/blender/pulls/148801
+---
+ .../keyconfig/keymap_data/blender_default.py  |   1 +
+ .../keymap_data/industry_compatible_data.py   |   1 +
+ .../editors/include/ED_screen_types.hh        |   4 +
+ .../templates/interface_template_status.cc    |   7 +
+ source/blender/editors/screen/area.cc         |  46 +++++-
+ source/blender/editors/screen/screen_edit.cc  |   7 +
+ source/blender/editors/screen/screen_ops.cc   | 147 +++++++++++++++++-
+ source/blender/makesdna/DNA_screen_types.h    |   2 +
+ source/blender/makesrna/intern/rna_wm.cc      |   1 +
+ .../blender/windowmanager/wm_event_types.hh   |  13 +-
+ 10 files changed, 215 insertions(+), 14 deletions(-)
+
+diff --git a/scripts/presets/keyconfig/keymap_data/blender_default.py b/scripts/presets/keyconfig/keymap_data/blender_default.py
+index 1995712ba..5d69dd4c3 100644
+--- a/scripts/presets/keyconfig/keymap_data/blender_default.py
++++ b/scripts/presets/keyconfig/keymap_data/blender_default.py
+@@ -904,6 +904,7 @@ def km_screen_editing(params):
+         ("screen.area_dupli", {"type": 'ACTIONZONE_AREA', "value": 'ANY', "shift": True}, None),
+         ("screen.area_swap", {"type": 'ACTIONZONE_AREA', "value": 'ANY', "ctrl": True}, None),
+         ("screen.region_scale", {"type": 'ACTIONZONE_REGION', "value": 'ANY'}, None),
++        ("screen.quadview_size", {"type": 'ACTIONZONE_REGION_QUAD', "value": 'ANY'}, None),
+         ("screen.screen_full_area", {"type": 'ACTIONZONE_FULLSCREEN', "value": 'ANY'},
+          {"properties": [("use_hide_panels", True)]}),
+         # Area move after action zones
+diff --git a/scripts/presets/keyconfig/keymap_data/industry_compatible_data.py b/scripts/presets/keyconfig/keymap_data/industry_compatible_data.py
+index 2a0f3345a..05182be2b 100644
+--- a/scripts/presets/keyconfig/keymap_data/industry_compatible_data.py
++++ b/scripts/presets/keyconfig/keymap_data/industry_compatible_data.py
+@@ -279,6 +279,7 @@ def km_screen_editing(params):
+         ("screen.area_dupli", {"type": 'ACTIONZONE_AREA', "value": 'ANY', "shift": True}, None),
+         ("screen.area_swap", {"type": 'ACTIONZONE_AREA', "value": 'ANY', "ctrl": True}, None),
+         ("screen.region_scale", {"type": 'ACTIONZONE_REGION', "value": 'ANY'}, None),
++        ("screen.quadview_size", {"type": 'ACTIONZONE_REGION_QUAD', "value": 'ANY'}, None),
+         ("screen.screen_full_area", {"type": 'ACTIONZONE_FULLSCREEN', "value": 'ANY'},
+          {"properties": [("use_hide_panels", True)]}),
+         # Area move after action zones
+diff --git a/source/blender/editors/include/ED_screen_types.hh b/source/blender/editors/include/ED_screen_types.hh
+index 5e15363e8..7672ea14b 100644
+--- a/source/blender/editors/include/ED_screen_types.hh
++++ b/source/blender/editors/include/ED_screen_types.hh
+@@ -111,6 +111,10 @@ enum {
+    * - When a region is expanded, use the action zone to resize the region.
+    */
+   AZONE_REGION,
++  /**
++   * Widget at the very center of the 3D Viewport Quad View for resizing.
++   */
++  AZONE_REGION_QUAD,
+   /**
+    * Used when in editor full-screen draw a corner to return to normal mode.
+    */
+diff --git a/source/blender/editors/interface/templates/interface_template_status.cc b/source/blender/editors/interface/templates/interface_template_status.cc
+index 0e32f2135..c1bb9bf81 100644
+--- a/source/blender/editors/interface/templates/interface_template_status.cc
++++ b/source/blender/editors/interface/templates/interface_template_status.cc
+@@ -171,6 +171,13 @@ static bool uiTemplateInputStatusAzone(uiLayout *layout, const AZone *az, const
+     return true;
+   }
+ 
++  if (az->type == AZONE_REGION_QUAD) {
++    layout->label(nullptr, ICON_MOUSE_LMB_DRAG);
++    layout->separator(-0.2f);
++    layout->label(IFACE_("Resize Quadrants"), ICON_NONE);
++    return true;
++  }
++
+   if (az->type == AZONE_REGION) {
+     layout->label(nullptr, ICON_MOUSE_LMB_DRAG);
+     layout->separator(-0.2f);
+diff --git a/source/blender/editors/screen/area.cc b/source/blender/editors/screen/area.cc
+index 0767a5d30..d332f021c 100644
+--- a/source/blender/editors/screen/area.cc
++++ b/source/blender/editors/screen/area.cc
+@@ -1131,6 +1131,21 @@ static void fullscreen_azone_init(ScrArea *area, ARegion *region)
+   BLI_rcti_init(&az->rect, az->x1, az->x2, az->y1, az->y2);
+ }
+ 
++static void quadview_azone_init(ScrArea *area, ARegion *region)
++{
++  AZone *az = MEM_callocN<AZone>("Quad View action zone");
++  BLI_addtail(&(area->actionzones), az);
++  az->type = AZONE_REGION_QUAD;
++  az->region = region;
++  const int half_line = int(floor(U.pixelsize / 2.0f));
++  const int padding = int((UI_SCALE_FAC + U.pixelsize) * 2.0f) + half_line;
++  az->x1 = region->winrct.xmax - padding + 1;
++  az->y1 = region->winrct.ymax - padding + 1;
++  az->x2 = region->winrct.xmax + padding + 1;
++  az->y2 = region->winrct.ymax + padding + 1;
++  BLI_rcti_init(&az->rect, az->x1, az->x2, az->y1, az->y2);
++}
++
+ /**
+  * Return true if the background color alpha is close to fully transparent. That is, a value of
+  * less than 50 on a [0-255] scale (rather arbitrary threshold). Assumes the region uses #TH_BACK
+@@ -1758,21 +1773,26 @@ static void region_rect_recursive(
+       }
+     }
+     if (quad) {
++      const float ratio_x = (area->quadview_ratio[0] != 0.0f) ? area->quadview_ratio[0] : 0.5f;
++      const float ratio_y = (area->quadview_ratio[1] != 0.0f) ? area->quadview_ratio[1] : 0.5f;
++      const int x = remainder->xmin + int(float(remainder->xmax - remainder->xmin) * ratio_x);
++      const int y = remainder->ymin + int(float(remainder->ymax - remainder->ymin) * ratio_y);
++
+       if (quad == 1) { /* left bottom */
+-        region->winrct.xmax = BLI_rcti_cent_x(remainder);
+-        region->winrct.ymax = BLI_rcti_cent_y(remainder);
++        region->winrct.xmax = x;
++        region->winrct.ymax = y;
+       }
+       else if (quad == 2) { /* left top */
+-        region->winrct.xmax = BLI_rcti_cent_x(remainder);
+-        region->winrct.ymin = BLI_rcti_cent_y(remainder) + 1;
++        region->winrct.xmax = x;
++        region->winrct.ymin = y + 1;
+       }
+       else if (quad == 3) { /* right bottom */
+-        region->winrct.xmin = BLI_rcti_cent_x(remainder) + 1;
+-        region->winrct.ymax = BLI_rcti_cent_y(remainder);
++        region->winrct.xmin = x + 1;
++        region->winrct.ymax = y;
+       }
+       else { /* right top */
+-        region->winrct.xmin = BLI_rcti_cent_x(remainder) + 1;
+-        region->winrct.ymin = BLI_rcti_cent_y(remainder) + 1;
++        region->winrct.xmin = x + 1;
++        region->winrct.ymin = y + 1;
+         BLI_rcti_init(remainder, 0, 0, 0, 0);
+       }
+ 
+@@ -2175,6 +2195,9 @@ void ED_area_init(bContext *C, const wmWindow *win, ScrArea *area)
+   /* clear all azones, add the area triangle widgets */
+   area_azone_init(win, screen, area);
+ 
++  /* Only one quad view gets AZONE_REGION_QUAD. */
++  char quad_view_index = 0;
++
+   /* region windows, default and own handlers */
+   LISTBASE_FOREACH (ARegion *, region, &area->regionbase) {
+     region_evaulate_visibility(region);
+@@ -2195,6 +2218,13 @@ void ED_area_init(bContext *C, const wmWindow *win, ScrArea *area)
+ 
+     /* Some AZones use View2D data which is only updated in region init, so call that first! */
+     region_azones_add(screen, area, region);
++
++    if (region->alignment == RGN_ALIGN_QSPLIT) {
++      if (quad_view_index == 0) {
++        quadview_azone_init(area, region);
++      }
++      quad_view_index++;
++    }
+   }
+ 
+   /* Avoid re-initializing tools while resizing areas & regions. */
+diff --git a/source/blender/editors/screen/screen_edit.cc b/source/blender/editors/screen/screen_edit.cc
+index d415eeb85..b8513a53f 100644
+--- a/source/blender/editors/screen/screen_edit.cc
++++ b/source/blender/editors/screen/screen_edit.cc
+@@ -1114,6 +1114,9 @@ static void screen_cursor_set(wmWindow *win, const int xy[2])
+     else if (az->type == AZONE_REGION_SCROLL) {
+       WM_cursor_set(win, WM_CURSOR_DEFAULT);
+     }
++    else if (az->type == AZONE_REGION_QUAD) {
++      WM_cursor_set(win, WM_CURSOR_NSEW_SCROLL);
++    }
+     else if (az->type == AZONE_REGION) {
+       if (ELEM(az->edge, AE_LEFT_TO_TOPRIGHT, AE_RIGHT_TO_TOPLEFT)) {
+         WM_cursor_set(win, WM_CURSOR_X_MOVE);
+@@ -1720,6 +1723,8 @@ static bScreen *screen_state_to_nonnormal(bContext *C,
+   if (toggle_area) {
+     ED_area_data_swap(newa, toggle_area);
+     newa->flag = toggle_area->flag; /* mostly for AREA_FLAG_WASFULLSCREEN */
++    newa->quadview_ratio[0] = toggle_area->quadview_ratio[0];
++    newa->quadview_ratio[1] = toggle_area->quadview_ratio[1];
+   }
+ 
+   if (state == SCREENFULL) {
+@@ -1903,6 +1908,8 @@ ScrArea *ED_screen_state_toggle(bContext *C, wmWindow *win, ScrArea *area, const
+     if (fullsa) {
+       ED_area_data_swap(fullsa, area);
+       ED_area_tag_refresh(fullsa);
++      fullsa->quadview_ratio[0] = area->quadview_ratio[0];
++      fullsa->quadview_ratio[1] = area->quadview_ratio[1];
+     }
+ 
+     /* animtimer back */
+diff --git a/source/blender/editors/screen/screen_ops.cc b/source/blender/editors/screen/screen_ops.cc
+index 212a5d9c8..cedd865ea 100644
+--- a/source/blender/editors/screen/screen_ops.cc
++++ b/source/blender/editors/screen/screen_ops.cc
+@@ -912,6 +912,9 @@ static AZone *area_actionzone_refresh_xy(ScrArea *area, const int xy[2], const b
+       if (az->type == AZONE_AREA) {
+         break;
+       }
++      if (az->type == AZONE_REGION_QUAD) {
++        break;
++      }
+       if (az->type == AZONE_REGION) {
+         const ARegion *region = az->region;
+         const int local_xy[2] = {xy[0] - region->winrct.xmin, xy[1] - region->winrct.ymin};
+@@ -1123,6 +1126,9 @@ static void actionzone_apply(bContext *C, wmOperator *op, int type)
+   else if (type == AZONE_FULLSCREEN) {
+     event.type = EVT_ACTIONZONE_FULLSCREEN;
+   }
++  else if (type == AZONE_REGION_QUAD) {
++    event.type = EVT_ACTIONZONE_REGION_QUAD;
++  }
+   else {
+     event.type = EVT_ACTIONZONE_REGION;
+   }
+@@ -1156,8 +1162,8 @@ static wmOperatorStatus actionzone_invoke(bContext *C, wmOperator *op, const wmE
+   sad->y = event->xy[1];
+   sad->modifier = RNA_int_get(op->ptr, "modifier");
+ 
+-  /* region azone directly reacts on mouse clicks */
+-  if (ELEM(sad->az->type, AZONE_REGION, AZONE_FULLSCREEN)) {
++  /* Region azones directly react on mouse clicks. */
++  if (ELEM(sad->az->type, AZONE_REGION, AZONE_FULLSCREEN, AZONE_REGION_QUAD)) {
+     actionzone_apply(C, op, sad->az->type);
+     actionzone_exit(op);
+     return OPERATOR_FINISHED;
+@@ -3189,6 +3195,142 @@ static void SCREEN_OT_region_scale(wmOperatorType *ot)
+ 
+ /** \} */
+ 
++/* -------------------------------------------------------------------- */
++/** \name Quad View Resize Operator
++ * \{ */
++
++struct QuadViewSizeData {
++  ScrArea *area;
++  ARegion *region;
++  /* Combined bounds of the four regions. */
++  rcti bounds;
++  float original_ratio[2];
++};
++
++static void quadview_size_exit(wmOperator *op)
++{
++  QuadViewSizeData *qsd = static_cast<QuadViewSizeData *>(op->customdata);
++  MEM_freeN(qsd);
++  op->customdata = nullptr;
++  screen_modal_action_end();
++}
++
++static wmOperatorStatus quadview_size_invoke(bContext *C, wmOperator *op, const wmEvent *event)
++{
++  sActionzoneData *sad = static_cast<sActionzoneData *>(event->customdata);
++
++  if (event->type != EVT_ACTIONZONE_REGION_QUAD) {
++    BKE_report(op->reports, RPT_ERROR, "Can only size quad view from an action zone");
++    return OPERATOR_CANCELLED;
++  }
++
++  if (sad->sa1) {
++    QuadViewSizeData *qsd = MEM_callocN<QuadViewSizeData>("QuadViewSizeData");
++    op->customdata = qsd;
++    qsd->area = sad->sa1;
++    qsd->region = sad->az->region;
++
++    BLI_rcti_init_minmax(&qsd->bounds);
++    LISTBASE_FOREACH (ARegion *, region, &sad->sa1->regionbase) {
++      if (region->alignment == RGN_ALIGN_QSPLIT) {
++        BLI_rcti_do_minmax_rcti(&qsd->bounds, &region->winrct);
++      }
++    }
++
++    qsd->original_ratio[0] = float(BLI_rcti_size_x(&sad->az->region->winrct)) /
++                             float(BLI_rcti_size_x(&qsd->bounds));
++    qsd->original_ratio[1] = float(BLI_rcti_size_y(&sad->az->region->winrct)) /
++                             float(BLI_rcti_size_y(&qsd->bounds));
++
++    WM_event_add_notifier(C, NC_SCREEN | NA_EDITED, nullptr);
++
++    /* add temp handler */
++    screen_modal_action_begin();
++    WM_event_add_modal_handler(C, op);
++
++    return OPERATOR_RUNNING_MODAL;
++  }
++
++  return OPERATOR_FINISHED;
++}
++
++static void quadview_size_cancel(bContext *C, wmOperator *op)
++{
++  ED_workspace_status_text(C, nullptr);
++  quadview_size_exit(op);
++}
++
++static wmOperatorStatus quadview_size_modal(bContext *C, wmOperator *op, const wmEvent *event)
++{
++  QuadViewSizeData *qsd = static_cast<QuadViewSizeData *>(op->customdata);
++  switch (event->type) {
++    case MOUSEMOVE: {
++      if (qsd->region->runtime->type->on_user_resize) {
++        qsd->region->runtime->type->on_user_resize(qsd->region);
++      }
++      WM_cursor_set(CTX_wm_window(C), WM_CURSOR_NSEW_SCROLL);
++      float quad_x = float(event->xy[0] - (qsd->bounds.xmin)) /
++                     float(BLI_rcti_size_x(&qsd->bounds) + 1);
++      float quad_y = float((event->xy[1]) - (qsd->bounds.ymin)) /
++                     float(BLI_rcti_size_y(&qsd->bounds) + 1);
++
++      if (event->modifier & KM_CTRL) {
++        quad_x = round(quad_x * 12.0f) / 12.0f;
++        quad_y = round(quad_y * 12.0f) / 12.0f;
++      }
++
++      /* Clamp.*/
++      qsd->area->quadview_ratio[0] = std::clamp(quad_x, 0.1f, 0.9f);
++      qsd->area->quadview_ratio[1] = std::clamp(quad_y, 0.2f, 0.8f);
++
++      WorkspaceStatus status(C);
++      status.item(IFACE_("Cancel"), ICON_EVENT_ESC);
++      status.item_bool(IFACE_("Snap"), event->modifier & KM_CTRL, ICON_EVENT_CTRL);
++
++      ED_area_tag_redraw(qsd->area);
++      WM_event_add_notifier(C, NC_SCREEN | NA_EDITED, nullptr);
++      break;
++    }
++    case LEFTMOUSE:
++      if (event->val == KM_RELEASE) {
++        ED_area_tag_redraw(qsd->area);
++        WM_event_add_notifier(C, NC_SCREEN | NA_EDITED, nullptr);
++        quadview_size_cancel(C, op);
++        return OPERATOR_FINISHED;
++      }
++      break;
++
++    case EVT_ESCKEY:
++      qsd->area->quadview_ratio[0] = qsd->original_ratio[0];
++      qsd->area->quadview_ratio[1] = qsd->original_ratio[1];
++      ED_area_tag_redraw(qsd->area);
++      WM_event_add_notifier(C, NC_SCREEN | NA_EDITED, nullptr);
++      quadview_size_cancel(C, op);
++      return OPERATOR_CANCELLED;
++    default: {
++      break;
++    }
++  }
++
++  return OPERATOR_RUNNING_MODAL;
++}
++
++static void SCREEN_OT_quadview_size(wmOperatorType *ot)
++{
++  /* identifiers */
++  ot->name = "Quad View Resize";
++  ot->description = "Resize Quad View areas";
++  ot->idname = "SCREEN_OT_quadview_size";
++
++  ot->invoke = quadview_size_invoke;
++  ot->modal = quadview_size_modal;
++  ot->cancel = quadview_size_cancel;
++  ot->poll = ED_operator_areaactive;
++
++  /* flags */
++  ot->flag = OPTYPE_BLOCKING | OPTYPE_INTERNAL;
++}
++
+ /* -------------------------------------------------------------------- */
+ /** \name Frame Change Operator
+  * \{ */
+@@ -6859,6 +7001,7 @@ void ED_operatortypes_screen()
+   WM_operatortype_append(SCREEN_OT_region_scale);
+   WM_operatortype_append(SCREEN_OT_region_toggle);
+   WM_operatortype_append(SCREEN_OT_region_flip);
++  WM_operatortype_append(SCREEN_OT_quadview_size);
+   WM_operatortype_append(SCREEN_OT_header_toggle_menus);
+   WM_operatortype_append(SCREEN_OT_region_context_menu);
+   WM_operatortype_append(SCREEN_OT_screen_set);
+diff --git a/source/blender/makesdna/DNA_screen_types.h b/source/blender/makesdna/DNA_screen_types.h
+index d70faf336..56db0cd92 100644
+--- a/source/blender/makesdna/DNA_screen_types.h
++++ b/source/blender/makesdna/DNA_screen_types.h
+@@ -479,6 +479,8 @@ typedef struct ScrArea {
+   /** Non-NULL if this area is global. */
+   ScrGlobalAreaData *global;
+ 
++  float quadview_ratio[2];
++
+   /**
+    * #SpaceLink.
+    * A list of space links (editors) that were open in this area before. When
+diff --git a/source/blender/makesrna/intern/rna_wm.cc b/source/blender/makesrna/intern/rna_wm.cc
+index 93050ee50..ccfd260a9 100644
+--- a/source/blender/makesrna/intern/rna_wm.cc
++++ b/source/blender/makesrna/intern/rna_wm.cc
+@@ -471,6 +471,7 @@ const EnumPropertyItem rna_enum_event_type_items[] = {
+     /* Action Zones. */
+     {EVT_ACTIONZONE_AREA, "ACTIONZONE_AREA", 0, "ActionZone Area", "AZone Area"},
+     {EVT_ACTIONZONE_REGION, "ACTIONZONE_REGION", 0, "ActionZone Region", "AZone Region"},
++    {EVT_ACTIONZONE_REGION_QUAD, "ACTIONZONE_REGION_QUAD", 0, "ActionZone Quad", "AZone Quad"},
+     {EVT_ACTIONZONE_FULLSCREEN,
+      "ACTIONZONE_FULLSCREEN",
+      0,
+diff --git a/source/blender/windowmanager/wm_event_types.hh b/source/blender/windowmanager/wm_event_types.hh
+index abbf433b3..9bc701e8f 100644
+--- a/source/blender/windowmanager/wm_event_types.hh
++++ b/source/blender/windowmanager/wm_event_types.hh
+@@ -375,9 +375,10 @@ enum wmEventType : int16_t {
+ 
+   /* Action-zones, tweak, gestures: 0x500x, 0x501x
+    * Keep in sync with #IS_EVENT_ACTIONZONE(...). */
+-  EVT_ACTIONZONE_AREA = 0x5000,       /* 20480 */
+-  EVT_ACTIONZONE_REGION = 0x5001,     /* 20481 */
+-  EVT_ACTIONZONE_FULLSCREEN = 0x5011, /* 20497 */
++  EVT_ACTIONZONE_AREA = 0x5000,        /* 20480 */
++  EVT_ACTIONZONE_REGION = 0x5001,      /* 20481 */
++  EVT_ACTIONZONE_REGION_QUAD = 0x5002, /* 20482 */
++  EVT_ACTIONZONE_FULLSCREEN = 0x5011,  /* 20497 */
+ 
+   /* NOTE: these values are saved in key-map files, do not change them but just add new ones. */
+ 
+@@ -460,7 +461,11 @@ enum wmEventType : int16_t {
+   ((event_type) >= _NDOF_BUTTON_MIN && (event_type) <= _NDOF_BUTTON_MAX)
+ 
+ #define IS_EVENT_ACTIONZONE(event_type) \
+-  ELEM(event_type, EVT_ACTIONZONE_AREA, EVT_ACTIONZONE_REGION, EVT_ACTIONZONE_FULLSCREEN)
++  ELEM(event_type, \
++       EVT_ACTIONZONE_AREA, \
++       EVT_ACTIONZONE_REGION, \
++       EVT_ACTIONZONE_REGION_QUAD, \
++       EVT_ACTIONZONE_FULLSCREEN)
+ 
+ /** Test whether event type is acceptable as hotkey (excluding modifiers). */
+ #define ISHOTKEY(event_type) \
+
+From 210365baa00ec41bbc19478851c4750a11c2c67f Mon Sep 17 00:00:00 2001
+From: Pratik Borhade <25420+pratikpb2123@noreply.localhost>
+Date: Tue, 11 Aug 2026 10:29:12 +0200
+Subject: [PATCH 2/3] UI: Fine adjusting values with arrows on number button
+
+When editing number buttons with arrow keys, allow precision editing
+similar to drag editing of button. This supports step_size increment
+with shift, ctrl and ctrl+shift key.
+There's little issue when incrementing few float properties of Rotation
+type. `step_size` is 100 for them which increments value by large factor
+during ctrl click.
+
+See PR description for videos
+
+Pull Request: https://projects.blender.org/blender/blender/pulls/161290
+---
+ .../editors/interface/interface_handlers.cc        | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/source/blender/editors/interface/interface_handlers.cc b/source/blender/editors/interface/interface_handlers.cc
+index c000dd82b..bef1bd92e 100644
+--- a/source/blender/editors/interface/interface_handlers.cc
++++ b/source/blender/editors/interface/interface_handlers.cc
+@@ -5773,7 +5773,7 @@ static int ui_do_but_NUM(
+       click = 1;
+     }
+     else if (event->val == KM_PRESS) {
+-      if (ELEM(event->type, LEFTMOUSE, EVT_PADENTER, EVT_RETKEY) && (event->modifier & KM_CTRL)) {
++      if (ELEM(event->type, EVT_PADENTER, EVT_RETKEY) && (event->modifier & KM_CTRL)) {
+         button_activate_state(C, but, BUTTON_STATE_TEXT_EDITING);
+         retval = WM_UI_HANDLER_BREAK;
+       }
+@@ -5880,7 +5880,8 @@ static int ui_do_but_NUM(
+       if (but->drawflag & (UI_BUT_HOVER_LEFT | UI_BUT_HOVER_RIGHT)) {
+         button_activate_state(C, but, BUTTON_STATE_NUM_EDITING);
+ 
+-        const int value_step = int(number_but->step_size);
++        const int step = number_but->step_size * (event->modifier & KM_SHIFT ? 0.1 : 1);
++        const int value_step = std::max(1, step);
+         BLI_assert(value_step > 0);
+         const int softmin = round_fl_to_int_clamp(but->softmin);
+         const int softmax = round_fl_to_int_clamp(but->softmax);
+@@ -5919,13 +5920,20 @@ static int ui_do_but_NUM(
+         else {
+           value_step = double(number_but->step_size * UI_PRECISION_FLOAT_SCALE);
+         }
++
++        const eSnapType snap = ui_event_to_snap(event);
++        value_step = (snap == SNAP_OFF) ? value_step : number_but->step_size;
++        if (event->modifier & KM_SHIFT) {
++          value_step *= 0.1;
++        }
++
+         BLI_assert(value_step > 0.0f);
+         const double value_test =
+             (but->drawflag & UI_BUT_HOVER_LEFT) ?
+                 double(max_ff(but->softmin, float(data->value - value_step))) :
+                 double(min_ff(but->softmax, float(data->value + value_step)));
+         if (value_test != data->value) {
+-          data->value = value_test;
++          data->value = ui_numedit_apply_snapf(but, value_test, but->softmin, but->softmax, snap);
+         }
+         else {
+           data->cancel = true;
+
+From a567963c7f3358eef7c032e3295f129fc4dc2599 Mon Sep 17 00:00:00 2001
+From: John Kiril Swenson <john@blender.org>
+Date: Thu, 8 Oct 2026 08:12:45 +0200
+Subject: [PATCH 3/3] UI: Support holding a shortcut to temporarily switch
+ tools
+
+Clicking back and forth in the toolbar to alternate between tools can be
+quite slow. A dedicated shortcut with `tool_set_by_id` helps, but it
+still requires remembering to switch back to the previous tool every
+time (and learning two shortcuts). It would be much more helpful if
+Blender did this extra step for the user.
+
+For cases where there is a good "default" (like the select tool), this
+adds a new `WM_OT_tool_set_by_id_hold` operator which enables a tool on
+press (and hold) of some keyboard shortcut, and returns to the previous
+tool on release.
+
+We simply store the previous tool's idname on invoke, execute the tool
+change, and run modally until either:
+a). the key is released, where we restore the previous tool
+b). things were canceled by e.g. closing the window, where we also
+restore
+c). another `_set_by_id_hold` is run on top of the current one, where we
+make sure to _avoid_ overwriting the original idname to restore to, and
+instead just finish this operator in favor of the new `_set_by_id_hold`
+operator call.
+
+This will be used in !161031 (VSE blade tool rewrite) as a "quick tool".
+But other modules and users can also benefit from it, using the operator
+if they'd like.
+
+Note that toolsettings can still be adjusted in the N-panel while
+holding down the tool shortcut. If one wishes to temporarily make the
+tool more "persistent" they can click the tool in the sidebar or enable
+it from the Toolbar Popup (as before).
+
+Pull Request: https://projects.blender.org/blender/blender/pulls/164536
+
+Co-authored-by: Campbell Barton <campbell@blender.org>
+---
+ .../bl_keymap_utils/keymap_from_toolbar.py    | 34 ++++++---
+ scripts/startup/bl_operators/wm.py            | 73 +++++++++++++++++++
+ .../startup/bl_ui/space_toolsystem_common.py  |  5 +-
+ .../regions/interface_region_tooltip.cc       | 29 ++++++++
+ 4 files changed, 129 insertions(+), 12 deletions(-)
+
+diff --git a/scripts/modules/bl_keymap_utils/keymap_from_toolbar.py b/scripts/modules/bl_keymap_utils/keymap_from_toolbar.py
+index 49b2b9382..84fa10642 100644
+--- a/scripts/modules/bl_keymap_utils/keymap_from_toolbar.py
++++ b/scripts/modules/bl_keymap_utils/keymap_from_toolbar.py
+@@ -35,6 +35,9 @@ def generate(context, space_type, *, use_fallback_keys=True, use_reset=True):
+     def dict_as_tuple(d):
+         return tuple((k, v) for (k, v) in sorted(d.items()))
+ 
++    wm_tool_set_by_id_compat = {"wm.tool_set_by_id_hold"}
++    wm_tool_set_by_id_all = {"wm.tool_set_by_id", *wm_tool_set_by_id_compat}
++
+     cls = ToolSelectPanelHelper._tool_class_from_space_type(space_type)
+ 
+     items_all = [
+@@ -85,12 +88,18 @@ def generate(context, space_type, *, use_fallback_keys=True, use_reset=True):
+     if keymap_src is not None:
+         for kmi_src in keymap_src.keymap_items:
+             # Skip tools that aren't currently shown.
++            kmi_src_idname = kmi_src.idname
+             if (
+-                    (kmi_src.idname == "wm.tool_set_by_id") and
++                    (kmi_src_idname in wm_tool_set_by_id_all) and
+                     (kmi_src.properties.name not in items_all_id)
+             ):
+                 continue
+-            keymap.keymap_items.new_from_item(kmi_src)
++            kmi_new = keymap.keymap_items.new_from_item(kmi_src)
++            if kmi_src_idname in wm_tool_set_by_id_compat:
++                # The popup closes once a tool is picked, so holding is meaningless, set the tool instead.
++                # NOTE: changing the `idname` clears all properties, so the tool name must be copied back.
++                kmi_new.idname = "wm.tool_set_by_id"
++                kmi_new.properties.name = kmi_src.properties.name
+     del keymap_src
+     del items_all_id
+ 
+@@ -158,13 +167,18 @@ def generate(context, space_type, *, use_fallback_keys=True, use_reset=True):
+         if use_hack_properties:
+             # First check for direct assignment.
+             kmi_hack_properties.name = item.idname
+-            kmi_found = wm.keyconfigs.find_item_from_operator(
+-                idname="wm.tool_set_by_id",
+-                context='INVOKE_REGION_WIN',
+-                # properties={"name": item.idname},
+-                properties=kmi_hack_properties,
+-                include={'KEYBOARD'},
+-            )[1]
++            # Only the `name` is set, so these properties also match the "hold" operator.
++            for kmi_found_idname in ("wm.tool_set_by_id", *wm_tool_set_by_id_compat):
++                kmi_found = wm.keyconfigs.find_item_from_operator(
++                    idname=kmi_found_idname,
++                    context='INVOKE_REGION_WIN',
++                    # properties={"name": item.idname},
++                    properties=kmi_hack_properties,
++                    include={'KEYBOARD'},
++                )[1]
++                if kmi_found is not None:
++                    break
++            del kmi_found_idname
+ 
+         else:
+             kmi_found = None
+@@ -225,7 +239,7 @@ def generate(context, space_type, *, use_fallback_keys=True, use_reset=True):
+         if (
+                 (len(kmi_found_type) == 1) or
+                 # When a tool is being activated instead of running an operator, just copy the shortcut.
+-                (kmi_found.idname in {"wm.tool_set_by_id", "WM_OT_tool_set_by_id"})
++                (kmi_found.idname in wm_tool_set_by_id_all)
+         ):
+             kmi_args = {"type": kmi_found_type, **modifier_keywords_from_item(kmi_found)}
+             if kmi_unique_or_pass(kmi_args):
+diff --git a/scripts/startup/bl_operators/wm.py b/scripts/startup/bl_operators/wm.py
+index b251a3a77..58e440d80 100644
+--- a/scripts/startup/bl_operators/wm.py
++++ b/scripts/startup/bl_operators/wm.py
+@@ -2357,6 +2357,78 @@ class WM_OT_tool_set_by_id(Operator):
+             return {'CANCELLED'}
+ 
+ 
++class WM_OT_tool_set_by_id_hold(Operator):
++    """Set the tool by name while the key is held, restoring the previous tool on release (for key-maps)"""
++    bl_idname = "wm.tool_set_by_id_hold"
++    bl_label = "Set Tool by Name (Hold)"
++
++    # Only kept for identity, never inspect it's contents.
++    _active_operator = None
++
++    name: StringProperty(
++        name="Identifier",
++        description="Identifier of the tool",
++    )
++
++    space_type: rna_space_type_prop
++
++    def _active_tool_restore(self, context):
++        from bl_ui.space_toolsystem_common import activate_by_id
++        if self._tool_prev_idname:
++            activate_by_id(context, self._space_type, self._tool_prev_idname)
++        # Harmless but better not keep a dangling reference.
++        WM_OT_tool_set_by_id_hold._active_operator = None
++
++    def invoke(self, context, event):
++        from bl_ui.space_toolsystem_common import (
++            ToolSelectPanelHelper,
++            activate_by_id,
++        )
++
++        if (space_type := WM_OT_tool_set_by_id.space_type_from_operator(self, context)) is None:
++            return {'CANCELLED'}
++
++        if (
++                (op_other := context.window.modal_operators.get(self.bl_idname)) and
++                (op_other._space_type == space_type)
++        ):
++            tool_prev_idname = op_other._tool_prev_idname
++        else:
++            # Should always be set, nevertheless, if in some rare case it's not,
++            # that shouldn't prevent the tool from being activated.
++            tool_prev = ToolSelectPanelHelper.tool_active_from_context(context, space_type)
++            tool_prev_idname = "" if tool_prev is None else tool_prev.idname
++
++        if not activate_by_id(context, space_type, self.name):
++            self.report({'WARNING'}, rpt_("Tool {!r} not found for space {!r}").format(self.name, space_type))
++            return {'CANCELLED'}
++
++        self._space_type = space_type
++        self._tool_prev_idname = tool_prev_idname
++        self._event_type = event.type
++
++        WM_OT_tool_set_by_id_hold._active_operator = self
++
++        context.window_manager.modal_handler_add(self)
++        return {'RUNNING_MODAL'}
++
++    def cancel(self, context):
++        if WM_OT_tool_set_by_id_hold._active_operator is not self:
++            return
++        self._active_tool_restore(context)
++
++    def modal(self, context, event):
++        # Another operator took over.
++        if WM_OT_tool_set_by_id_hold._active_operator is not self:
++            return {'FINISHED', 'PASS_THROUGH'}
++
++        if event.type == self._event_type and event.value == 'RELEASE':
++            self._active_tool_restore(context)
++            return {'FINISHED'}
++
++        return {'PASS_THROUGH'}
++
++
+ class WM_OT_tool_set_by_index(Operator):
+     """Set the tool by index (for key-maps)"""
+     bl_idname = "wm.tool_set_by_index"
+@@ -3695,6 +3767,7 @@ classes = (
+     WM_OT_url_open,
+     WM_OT_url_open_preset,
+     WM_OT_tool_set_by_id,
++    WM_OT_tool_set_by_id_hold,
+     WM_OT_tool_set_by_index,
+     WM_OT_tool_set_by_brush_type,
+     WM_OT_toolbar,
+diff --git a/scripts/startup/bl_ui/space_toolsystem_common.py b/scripts/startup/bl_ui/space_toolsystem_common.py
+index 32cab6b2d..5d5052a61 100644
+--- a/scripts/startup/bl_ui/space_toolsystem_common.py
++++ b/scripts/startup/bl_ui/space_toolsystem_common.py
+@@ -773,8 +773,9 @@ class ToolSelectPanelHelper:
+             return None, None
+ 
+     @staticmethod
+-    def tool_active_from_context(context):
+-        space_type = context.space_data.type
++    def tool_active_from_context(context, space_type=None):
++        if space_type is None:
++            space_type = context.space_data.type
+         return ToolSelectPanelHelper._tool_active_from_context(context, space_type)
+ 
+     @staticmethod
+diff --git a/source/blender/editors/interface/regions/interface_region_tooltip.cc b/source/blender/editors/interface/regions/interface_region_tooltip.cc
+index abc2914da..1701b9a8a 100644
+--- a/source/blender/editors/interface/regions/interface_region_tooltip.cc
++++ b/source/blender/editors/interface/regions/interface_region_tooltip.cc
+@@ -753,6 +753,35 @@ static std::unique_ptr<uiTooltipData> ui_tooltip_data_from_tool(bContext *C,
+     }
+   }
+ 
++  if (show_shortcut) {
++    /* Shortcut for Hold
++     *
++     * As a third option, we may have a shortcut that enables a tool when held, and
++     * returns to the previous tool when released.
++     */
++
++    std::optional<std::string> shortcut;
++    if (wmOperatorType *ot_hold = WM_operatortype_find("WM_OT_tool_set_by_id_hold", false)) {
++      PointerRNA op_props = WM_operator_properties_create_ptr(ot_hold);
++      RNA_string_set(&op_props, "name", tool_id);
++      shortcut = WM_key_event_operator_string(C,
++                                              ot_hold->idname,
++                                              blender::wm::OpCallContext::InvokeRegionWin,
++                                              static_cast<IDProperty *>(op_props.data),
++                                              true);
++      WM_operator_properties_free(&op_props);
++    }
++
++    if (shortcut) {
++      UI_tooltip_text_field_add(*data,
++                             fmt::format(fmt::runtime(TIP_("Shortcut Hold: {}")), *shortcut),
++                             {},
++                             UI_TIP_STYLE_NORMAL,
++                             UI_TIP_LC_VALUE,
++                             true);
++    }
++  }
++
+   /* Python */
+   if ((is_quick_tip == false) && (U.flag & USER_TOOLTIPS_PYTHON)) {
+     std::string str = ui_tooltip_text_python_from_op(C, but->optype, but->opptr);

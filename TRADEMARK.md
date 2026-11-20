@@ -28,15 +28,15 @@ All original Blender copyright notices and credits are preserved; modifications 
 free software under the GPL, but the **name and logo are trademarks** and are not covered by the
 GPL.
 
-This project uses the word "Blender" **only descriptively** — to state truthfully that it is a
-build *of* Blender (nominative use). To avoid any implication of official status or endorsement:
+The app bundle keeps **Blender's original branding exactly as shipped in the upstream `ios`
+branch**: the name "Blender", the official Blender icon, and upstream's `Info.plist` (including
+its bundle identifier). This repository does not alter them; it only builds upstream's own
+iOS app with the input/UI patches listed in [CHANGES.md](CHANGES.md).
 
-- the application's home-screen name is **"Blender iPad"** and the distribution is labeled
-  **"(Unofficial)"**;
-- the **official Blender logo is not used**; a distinct app icon ships instead;
-- the bundle identifier is `com.unofficial.blenderipad` (not `org.blenderfoundation.*`);
-- this notice and prominent "unofficial / not affiliated" statements appear in the README, the
-  app's info string, and the release notes.
+To avoid any implication of official status or endorsement, the **distribution** (repository,
+release names, `.ipa` file names and release notes) is labeled **"Unofficial"**, and this notice
+and prominent "unofficial / not affiliated" statements appear in the README and the release
+notes.
 
 If the Blender Foundation requests changes to how the name is used, this project will comply.
 

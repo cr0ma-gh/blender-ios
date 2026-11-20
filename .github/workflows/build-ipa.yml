@@ -2,7 +2,7 @@
 #
 # Recipe adapted from the proven community workflow at
 # https://github.com/Toemeler/blender-iOS-ipa (which publishes working IPAs built from
-# blender/blender@ios). Adjusted to apply THIS repo's patch + custom icon/branding.
+# blender/blender@ios). Adjusted to apply THIS repo's patches; Blender's original branding is kept.
 # The exact iOS-library fetch and dylib-bundling details may still need tuning against
 # that reference on first run — compare if a step fails.
 #
@@ -38,9 +38,11 @@ jobs:
       matrix:
         include:
           # Blender 5.0 + new tablet UI from blender/blender@ios-workshop
-          # (Menu Behavior Preferences #144838, Experimental editor dock #144945).
+          # (Menu Behavior Preferences #144838, Experimental editor dock #144945)
+          # + touch/keyboard UI backports from main (Quad View resizing, number-button
+          # arrow stepping, hold-shortcut tool switching).
           - variant: tablet
-            extra_patches: patches/tablet-ui.patch
+            extra_patches: patches/tablet-ui.patch patches/tablet-ui-backports.patch
           # Blender 5.0 as on the ios branch, without the workshop UI.
           - variant: legacy
             extra_patches: ""
@@ -78,7 +80,7 @@ jobs:
           python3 ./build_files/utils/make_update.py --no-blender --use-ios-libraries
           test -d lib/ios_arm64 || { echo "::error::iOS libraries (lib/ios_arm64) missing"; exit 1; }
 
-      - name: Apply this repo's patches + custom icon/branding
+      - name: Apply this repo's patches
         run: |
           cd blender
           for p in ${{ matrix.extra_patches }}; do
@@ -86,7 +88,8 @@ jobs:
             git apply "../overlay/$p"
           done
           git apply ../overlay/patches/blender-ipad.patch
-          cp ../overlay/ios/icon/blender_icon.icns release/ios/Blender.app/Assets/blender_icon.icns
+          # Original Blender branding: upstream Info.plist and official icon are kept as-is.
+          echo "app icon bytes: $(wc -c < release/ios/Blender.app/Assets/blender_icon.icns) (must be large, not an LFS pointer)"
 
       - name: Configure (iOS, Xcode generator)
         run: |
@@ -135,8 +138,9 @@ jobs:
           # causing dyld aborts on iOS ("mach-o file, but is for macOS").
           python3 overlay/build/fix_macho.py "$APP"
 
-          # iPad-Unofficial branding + iOS app icon (iOS ignores the .icns, so inject PNGs).
-          bash overlay/build/apply_branding.sh "$APP" overlay/ios/icon/icon_1024.png
+          # iOS app icon PNGs from Blender's official blender_icon.icns (iOS ignores .icns),
+          # Files app integration, binary Info.plist. Name/bundle id stay upstream's.
+          bash overlay/build/prepare_ios_bundle.sh "$APP" blender/release/ios/Blender.app/Assets/blender_icon.icns
           codesign --force --deep --sign - "$APP" || true
           rm -rf Payload && mkdir -p Payload
           cp -R "$APP" Payload/
@@ -167,5 +171,5 @@ jobs:
           gh release create "$TAG" "$IPA_NAME" \
             --repo "${{ github.repository }}" \
             --title "Blender iPad (Unofficial) $TAG" \
-            --notes "Unsigned IPAs built from blender/blender@ios (${BLENDER_COMMIT}, Blender 5.0) + UI & input adaptations. 'tablet' adds the new touch UI from blender/blender@ios-workshop (menu behavior, editor dock); 'legacy' is the plain ios branch. Sideload with Sideloadly, AltStore, SideStore, or TrollStore (free Apple ID = 7-day expiry). Unofficial build — not affiliated with the Blender Foundation." \
+            --notes "Unsigned IPAs built from blender/blender@ios (${BLENDER_COMMIT}, Blender 5.0) + UI & input adaptations. 'tablet' adds the new touch UI from blender/blender@ios-workshop (menu behavior, editor dock) and UI backports from main (Quad View resizing, number-button arrow stepping, hold-shortcut tool switching); 'legacy' is the plain ios branch. Sideload with Sideloadly, AltStore, SideStore, or TrollStore (free Apple ID = 7-day expiry). Unofficial build — not affiliated with the Blender Foundation." \
           || gh release upload "$TAG" "$IPA_NAME" --repo "${{ github.repository }}" --clobber

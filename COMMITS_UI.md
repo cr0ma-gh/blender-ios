@@ -16,7 +16,7 @@ Questo documento riassume i commit, le modifiche architetturali alla UI e al sis
   - `922720b9` — *UI: Touch-Capable Area Maintenance #144591* (Gestione e ridimensionamento delle aree con dita/stilo) — già presente nel branch `ios` tramite main
 
 ### Build prodotte dalla CI
-- **`tablet`**: `ios@d9b6fe34` + `patches/tablet-ui.patch` (commit originali di `ios-workshop`) + `patches/blender-ipad.patch`
+- **`tablet`**: `ios@d9b6fe34` + `patches/tablet-ui.patch` (commit originali di `ios-workshop`) + `patches/tablet-ui-backports.patch` (commit di `main` riportati sulla 5.0) + `patches/blender-ipad.patch`
 - **`legacy`**: `ios@d9b6fe34` + `patches/blender-ipad.patch`
 
 ---
@@ -50,10 +50,17 @@ Il branch upstream ufficiale `ios` si avviava su iOS ma era incompleto per l'inp
    - Il click centrale (`MIDDLEMOUSE`) del mouse esterno avvia l'operatore modale nativo di spostamento vista (depth/zoom correct grab-pan).
 
 ### C. Branding e Configurazione iOS
-1. **`release/ios/Blender.app/Info.plist` & Icone:**
-   - Display name: **Blender iPad**
-   - Bundle Identifier: `com.unofficial.blenderipad`
-   - Icone PNG a risoluzione nativa iPad (76x76, 152x152, 167x167) iniettate e Info.plist convertito in formato binario (`plutil -convert binary1`) per garantire la compatibilità con AltStore, Sideloadly e SideStore.
+1. **Branding originale di Blender:** nome **Blender**, Bundle Identifier `org.blenderfoundation.blender` e icona ufficiale (`blender_icon.icns`) restano quelli upstream.
+2. **`build/prepare_ios_bundle.sh` (post-build):** icone PNG iPad (76x76, 152x152, 167x167) generate dall'icona ufficiale, integrazione con l'app File, e Info.plist convertito in formato binario (`plutil -convert binary1`) per la compatibilità con AltStore, Sideloadly e SideStore.
+
+---
+
+## 2b. Backport da `main` (solo build `tablet`, `patches/tablet-ui-backports.patch`)
+- `b5fd02b5` — *UI: Quad View Resizing*: ridimensionamento dei quadranti della Quad View trascinando il punto centrale (comodo con dito/Pencil).
+- `728c8624` — *UI: Fine adjusting values with arrows on number button*: frecce dei campi numerici con passo fine (Shift) e snapping (Ctrl).
+- `2d186b8c` — *UI: Support holding a shortcut to temporarily switch tools*: tenendo premuto un tasto si passa temporaneamente a uno strumento (Magic Keyboard).
+
+Valutati ma non inclusi (conflitti troppo ampi con la 5.0, da riprendere con la 5.1+): *Navigation Gizmo Toolbar* (`2e62d75b`), *custom pressure curves* per hardness/auto-smooth/spacing (`8f909f9a`), *Preferences Search* (`0add7e5c`), *popup a lato del bottone* (`6dfe6f34`), *scroll normale nei menu* (`77cb9a66`), *soft snapping nel ridimensionamento aree* (`521293cb`). Dal branch `android` nessuna modifica UI è applicabile all'iPad (sono specifiche SDL/Android).
 
 ---
 

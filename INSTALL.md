@@ -1,8 +1,8 @@
 # Installing on your iPad
 
 This app is **not on the App Store**. You install it by **sideloading** an unsigned `.ipa`.
-Download the latest `Blender-iPad-Unofficial.ipa` from the
-[**Releases**](../../releases) page first.
+Download the latest `.ipa` from the [**Releases**](../../releases) page first:
+`Blender-iPad-Unofficial-tablet.ipa` (new touch UI) or `Blender-iPad-Unofficial-legacy.ipa`.
 
 > **No Mac is required.** Windows or Linux works for the one-time signing step. There is,
 > however, no way to do everything with a free Apple ID from the iPad *alone* — you need a
@@ -20,8 +20,9 @@ Download the latest `Blender-iPad-Unofficial.ipa` from the
 3. **Free Apple ID = max 3 sideloaded apps** at a time.
 4. **Trust the certificate** after installing:
    `Settings → General → VPN & Device Management →` tap your developer profile → **Trust**.
-5. This build's identifier is `com.unofficial.blenderipad`, so it installs **alongside** any
-   other Blender app. Delete older copies if you don't want duplicates.
+5. This build keeps Blender's original identifier `org.blenderfoundation.blender`, so the
+   `tablet` and `legacy` builds **replace each other** (only one can be installed at a time).
+   Some signing tools append a suffix to the identifier, in which case both may coexist.
 6. iPadOS 26 is very new — make sure your chosen tool already supports it before you start.
 
 ---
@@ -33,11 +34,11 @@ Works on **Windows and macOS**. Good if you just want it installed.
 1. Install **Sideloadly** from https://sideloadly.io and **iTunes** (Windows) / nothing extra
    (macOS).
 2. Connect the iPad by USB and trust the computer.
-3. Open Sideloadly, drag in `Blender-iPad-Unofficial.ipa`.
+3. Open Sideloadly, drag in the downloaded `.ipa`.
 4. Enter your **Apple ID** (a free one works; a throwaway Apple ID is fine and safer).
 5. Click **Start**. Sideloadly signs and installs it.
 6. On the iPad, enable Developer Mode (step above) and **Trust** the certificate.
-7. Launch **Blender iPad**.
+7. Launch **Blender**.
 
 Re-run these steps every 7 days (free Apple ID) to refresh.
 
@@ -80,7 +81,8 @@ Configurator). The install lasts **1 year** and there's no 3-app limit. Best for
 # 🇰🇷 한국어 설치 가이드
 
 이 앱은 **앱스토어에 없습니다.** 서명되지 않은 `.ipa`를 **사이드로드**해서 설치합니다.
-먼저 [**Releases**](../../releases)에서 최신 `Blender-iPad-Unofficial.ipa`를 받으세요.
+먼저 [**Releases**](../../releases)에서 최신 `.ipa`를 받으세요:
+`Blender-iPad-Unofficial-tablet.ipa`(새 터치 UI) 또는 `Blender-iPad-Unofficial-legacy.ipa`.
 
 > **맥은 필요 없습니다.** 윈도우/리눅스로도 1회 서명이 가능합니다. 다만 무료 애플 ID 방식은
 > **아이패드 한 대만으로는** 안 되고, 최소 한 번은 컴퓨터가 필요합니다(또는 유료 개발자 계정).
@@ -93,8 +95,9 @@ Configurator). The install lasts **1 year** and there's no 3-app limit. Best for
    **유료 개발자 계정($99/년)은 1년** 유효. AltStore/SideStore는 자동 재서명.
 3. 무료 애플 ID는 **동시에 앱 3개까지**.
 4. 설치 후 **인증서 신뢰**: `설정 → 일반 → VPN 및 기기 관리 →` 개발자 프로필 → **신뢰**.
-5. 이 빌드의 식별자는 `com.unofficial.blenderipad`라 기존 블렌더 앱과 **별개로** 설치됩니다.
-   중복이 싫으면 옛 버전 삭제하세요.
+5. 이 빌드는 블렌더 원래 식별자 `org.blenderfoundation.blender`를 사용하므로 `tablet`과
+   `legacy` 빌드는 **서로 교체**됩니다(동시에 하나만 설치). 일부 서명 도구는 식별자에 접미사를
+   붙이며, 이 경우 둘 다 설치될 수 있습니다.
 6. iPadOS 26은 매우 최신이라, 쓰려는 도구가 26을 지원하는지 먼저 확인하세요.
 
 ## 방법 A — Sideloadly (가장 간단)
@@ -103,11 +106,11 @@ Configurator). The install lasts **1 year** and there's no 3-app limit. Best for
 
 1. https://sideloadly.io 에서 **Sideloadly** 설치 (윈도우는 **iTunes**도).
 2. 아이패드 USB 연결 + 컴퓨터 신뢰.
-3. Sideloadly에 `Blender-iPad-Unofficial.ipa`를 끌어다 놓기.
+3. Sideloadly에 받은 `.ipa`를 끌어다 놓기.
 4. **애플 ID** 입력 (무료 ID 가능, 버리는 용 ID 권장).
 5. **Start** → 서명·설치.
 6. 아이패드에서 개발자 모드 켜고 인증서 **신뢰**.
-7. **Blender iPad** 실행. 7일마다 반복.
+7. **Blender** 실행. 7일마다 반복.
 
 ## 방법 B — AltStore / SideStore (자동 갱신)
 

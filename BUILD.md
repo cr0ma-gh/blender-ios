@@ -2,7 +2,7 @@
 
 This documents how the distributed `.ipa` is produced, satisfying the GPL requirement that the
 **complete corresponding source** be available. The build = **Blender upstream `ios` branch at a
-pinned commit** + this repo's [patch](patches/blender-ipad.patch) + [icon](ios/icon/).
+pinned commit** + this repo's [patches](patches/), with Blender's original branding.
 
 > **Heads up:** compiling Blender for iOS is heavy and the experimental `ios` branch needs
 > iOS-specific precompiled libraries and a working CMake/Xcode toolchain. The patch in this repo
@@ -31,14 +31,14 @@ git lfs install && git lfs pull                          # pulls startup.blend e
 python3 ./build_files/utils/make_update.py --no-blender --use-ios-libraries
 
 # 3. Apply this project's source patches.
-#    'tablet' build: first the new touch UI from upstream ios-workshop (skip for 'legacy')
+#    'tablet' build: first the new touch UI from upstream ios-workshop + main backports
+#    (skip both for 'legacy')
 git apply /path/to/blender-ipad-unofficial/patches/tablet-ui.patch
+git apply /path/to/blender-ipad-unofficial/patches/tablet-ui-backports.patch
 #    both builds:
 git apply /path/to/blender-ipad-unofficial/patches/blender-ipad.patch
 
-# 4. Use the distinct (trademark-safe) app icon
-cp /path/to/blender-ipad-unofficial/ios/icon/blender_icon.icns \
-   release/ios/Blender.app/Assets/blender_icon.icns
+# 4. (Blender's original Info.plist and official icon are used as-is.)
 
 # 5. Configure an iOS Xcode build. APPLE_TARGET_DEVICE=ios sets up the whole iOS toolchain
 #    (cross-compile, arm64, SDK, deployment target). Do NOT also pass CMAKE_SYSTEM_NAME /
@@ -66,10 +66,11 @@ GitHub Release.
   or `CMAKE_OSX_*` by hand can break iOS Python detection. The cloud CI
   ([.github/workflows/build-ipa.yml](.github/workflows/build-ipa.yml)) uses the same minimal
   config, adapted from https://github.com/Toemeler/blender-iOS-ipa.
-- The patch touches input handling (`GHOST_WindowIOS.mm`), two editor files, the Apple CMake
-  platform file, and the iOS `Info.plist` (branding). See [CHANGES.md](CHANGES.md).
-- **App icon:** iOS ignores the bundle's `.icns`, so the build injects PNG icons + `CFBundleIcons`
-  keys into the built `.app` as a post-build step via
-  [build/apply_branding.sh](build/apply_branding.sh) (also re-asserts the bundle id / display
-  name). `build_and_package.sh` and the CI both call it.
+- The patch touches input handling (`GHOST_WindowIOS.mm`), a few editor/platform files and the
+  Apple CMake platform file; Blender's `Info.plist` and branding are untouched. See
+  [CHANGES.md](CHANGES.md).
+- **App icon:** iOS ignores the bundle's `.icns`, so the build renders PNG icons from Blender's
+  official `blender_icon.icns` and adds `CFBundleIcons` keys to the built `.app` via
+  [build/prepare_ios_bundle.sh](build/prepare_ios_bundle.sh) (plus Files-app keys and a binary
+  plist). `build_and_package.sh` and the CI both call it.
 - Keep the pinned commit in sync with [CHANGES.md](CHANGES.md) if you rebase onto a newer upstream.

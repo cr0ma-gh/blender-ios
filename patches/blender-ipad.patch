@@ -842,46 +842,6 @@ index 272c21b1cd1..8fda77f6e06 100644
      [rootWindow release];
      rootWindow = nil;
    }
-diff --git a/release/ios/Blender.app/Info.plist b/release/ios/Blender.app/Info.plist
-index e478b5b7a1a..521a2c40587 100644
---- a/release/ios/Blender.app/Info.plist
-+++ b/release/ios/Blender.app/Info.plist
-@@ -21,7 +21,7 @@
- 			<true/>
- 			<key>LSItemContentTypes</key>
- 			<array>
--				<string>org.blenderfoundation.blender.file</string>
-+				<string>com.unofficial.blenderipad.file</string>
- 			</array>
- 		</dict>
- 	</array>
-@@ -32,13 +32,15 @@
- 	<key>CFBundleExecutable</key>
- 	<string>Blender</string>
- 	<key>CFBundleGetInfoString</key>
--	<string>${MACOSX_BUNDLE_LONG_VERSION_STRING}, Blender Foundation</string>
-+	<string>${MACOSX_BUNDLE_LONG_VERSION_STRING}, Unofficial iPad build — not affiliated with the Blender Foundation</string>
- 	<key>CFBundleIconFile</key>
- 	<string>Assets/blender_icon.icns</string>
- 	<key>CFBundleIdentifier</key>
--	<string>org.blenderfoundation.blender</string>
-+	<string>com.unofficial.blenderipad</string>
- 	<key>CFBundleInfoDictionaryVersion</key>
- 	<string>6.0</string>
-+	<key>CFBundleDisplayName</key>
-+	<string>Blender iPad</string>
- 	<key>CFBundleName</key>
- 	<string>Blender</string>
- 	<key>CFBundlePackageType</key>
-@@ -78,7 +80,7 @@
- 				<string>public.data</string>
- 			</array>
- 			<key>UTTypeIdentifier</key>
--			<string>org.blenderfoundation.blender.file</string>
-+			<string>com.unofficial.blenderipad.file</string>
- 			<key>UTTypeDescription</key>
- 			<string>Blender File</string>
- 			<key>UTTypeIcons</key>
 diff --git a/source/blender/editors/interface/view2d/view2d_ops.cc b/source/blender/editors/interface/view2d/view2d_ops.cc
 index 685b1234918..21934bf1e37 100644
 --- a/source/blender/editors/interface/view2d/view2d_ops.cc

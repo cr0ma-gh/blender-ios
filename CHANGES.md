@@ -23,6 +23,11 @@ Two builds are produced from that base:
   - `97232b0f` — *WIP: Experimental editor dock #144945* (Dalai Felinto)
   - (`922720b9` *Touch-Capable Area Maintenance #144591* is already part of the pinned `ios`
     commit via main, so it is not re-applied.)
+  - plus [patches/tablet-ui-backports.patch](patches/tablet-ui-backports.patch): later upstream
+    `main` UI commits backported to 5.0 (only identifiers renamed to their 5.0 names):
+    - `b5fd02b5` — *UI: Quad View Resizing* (Harley Acheson): drag the Quad View center to resize
+    - `728c8624` — *UI: Fine adjusting values with arrows on number button* (Pratik Borhade)
+    - `2d186b8c` — *UI: Support holding a shortcut to temporarily switch tools* (John Kiril Swenson)
 - **legacy** — the pinned commit with `blender-ipad.patch` only.
 
 The newer `ios` tip `a1de44dd` (Blender 5.1.2) is not used yet: no 5.1 precompiled
@@ -55,21 +60,21 @@ The work-in-progress patch rebased onto it is kept in [patches/wip-5.1/](patches
 - `build_files/cmake/platform/platform_apple.cmake` — warn instead of a fatal error when the
   macOS precompiled libs are missing.
 
-### Branding (this distribution)
-- `release/ios/Blender.app/Info.plist`
-  - `CFBundleDisplayName` → **Blender iPad**
-  - `CFBundleIdentifier` → `com.unofficial.blenderipad`
-  - file-type UTI → `com.unofficial.blenderipad.file`
-  - info string marked as an unofficial build, not affiliated with the Blender Foundation
-- `release/ios/Blender.app/Assets/blender_icon.icns` — replaced with a distinct icon (the
-  official Blender logo is not used). Source: [ios/icon/](ios/icon/) (`make_icon.swift`).
+### Branding
+Blender's original branding is kept: upstream `release/ios/Blender.app/Info.plist` (name
+**Blender**, bundle id `org.blenderfoundation.blender`, file types) and the official
+`blender_icon.icns` are not modified.
 
-> The `.icns` is a binary asset shipped in [ios/icon/](ios/icon/) rather than in the text patch.
-> Because iOS ignores `.icns`, PNG icons and `CFBundleIcons` keys are injected into the built
-> `.app` post-build by [build/apply_branding.sh](build/apply_branding.sh).
+Post-build, [build/prepare_ios_bundle.sh](build/prepare_ios_bundle.sh) only adds what iOS needs
+on top of the built `.app` (no source change):
+- PNG home-screen icons rendered from the official `blender_icon.icns` + `CFBundleIcons` keys
+  (iOS ignores `.icns`);
+- iOS Files app integration (`UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`,
+  `UISupportsDocumentBrowser`);
+- conversion of `Info.plist` to binary format for sideloading-tool compatibility.
 
 ## Development note
 
 These modifications were developed with substantial **AI assistance** (Anthropic's Claude) —
-the input backend code, build/packaging scripts, CI, documentation, and app icon. Treat the
+the input backend code, build/packaging scripts, CI, and documentation. Treat the
 code as community-contributed and review it before relying on it.
