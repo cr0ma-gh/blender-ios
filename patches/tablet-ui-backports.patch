@@ -730,7 +730,7 @@ diff --git a/source/blender/editors/interface/regions/interface_region_tooltip.c
 index abc2914da..1701b9a8a 100644
 --- a/source/blender/editors/interface/regions/interface_region_tooltip.cc
 +++ b/source/blender/editors/interface/regions/interface_region_tooltip.cc
-@@ -753,6 +753,35 @@ static std::unique_ptr<uiTooltipData> ui_tooltip_data_from_tool(bContext *C,
+@@ -753,6 +753,36 @@ static std::unique_ptr<uiTooltipData> ui_tooltip_data_from_tool(bContext *C,
      }
    }
  
@@ -743,7 +743,8 @@ index abc2914da..1701b9a8a 100644
 +
 +    std::optional<std::string> shortcut;
 +    if (wmOperatorType *ot_hold = WM_operatortype_find("WM_OT_tool_set_by_id_hold", false)) {
-+      PointerRNA op_props = WM_operator_properties_create_ptr(ot_hold);
++      PointerRNA op_props;
++      WM_operator_properties_create_ptr(&op_props, ot_hold);
 +      RNA_string_set(&op_props, "name", tool_id);
 +      shortcut = WM_key_event_operator_string(C,
 +                                              ot_hold->idname,
