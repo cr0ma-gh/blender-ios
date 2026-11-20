@@ -88,6 +88,12 @@ Download the latest `.ipa` from the [Releases](../../releases) page. Each releas
 
 \* iPadOS 26 is very new — confirm your sideloading tool currently supports it.
 
+## 🖥 Windows (desktop) build
+
+A separate Windows build of **Blender 5.3** with the same tablet UX ideas (modifier wheel,
+clickable status bar, top level search, touch pies and popovers) lives in
+[desktop/](desktop/README.md).
+
 ## 🛠 Build from source
 
 You do **not** need a local Mac if you use the GitHub Actions workflow (cloud macOS runner) —

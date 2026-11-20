@@ -1,0 +1,1241 @@
+diff --git a/scripts/addons_core/tablet_ux/__init__.py b/scripts/addons_core/tablet_ux/__init__.py
+new file mode 100644
+index 00000000..ee8db342
+--- /dev/null
++++ b/scripts/addons_core/tablet_ux/__init__.py
+@@ -0,0 +1,455 @@
++# SPDX-FileCopyrightText: 2026 Blender Authors
++#
++# SPDX-License-Identifier: GPL-2.0-or-later
++
++"""
++Tablet UX: touch / pen friendly controls for using Blender without mouse and keyboard.
++
++Implements items of the "Blender on Tablet: Path to Release" plan (code.blender.org, 2026-11)
++on top of the existing desktop UI:
++
++- Beyond Mouse and Keyboard (#165853):
++  - Top level search (#165902): a search button in the top bar that searches menus of the
++    main 3D Viewport (or the largest editor), wherever it is pressed.
++  - Modifier wheel (#165901): a pie menu and a status bar dock with Ctrl / Shift / Alt / OS
++    "sticky" modifiers (one-shot or locked), implemented in the window-manager
++    (``wm.sticky_modifier_toggle``).
++  - On-screen keyboard (#165899): button to open the operating system's touch keyboard.
++  - Clickable status bar (#165900): implemented in C++ (modal key hints become buttons).
++- Compact UI use cases:
++  - Portfolio Review (#166024): navigation pie, shading & overlay popover, toggle UI (focus),
++    open file, search.
++  - Scene Assembly (#166529): save, "Add" menu, context menu, undo / redo buttons.
++  - Sculpting (#166714): central tool options block (radius, strength, remesh, dyntopo).
++- Responsive UI: a one-click "touch size" UI scale toggle for larger touch targets.
++"""
++
++bl_info = {
++    "name": "Tablet UX",
++    "description": "Touch and pen friendly controls (modifier wheel, search, pies, touch sizes)",
++    "author": "Blender Foundation",
++    "version": (1, 0),
++    "blender": (5, 3, 0),
++    "location": "3D Viewport header, Top bar, Status bar",
++    "support": "OFFICIAL",
++    "category": "Interface",
++}
++
++import os
++import sys
++
++import bpy
++from bpy.props import BoolProperty, EnumProperty, FloatProperty
++from bpy.types import AddonPreferences, Menu, Operator, Panel
++
++
++# -----------------------------------------------------------------------------
++# Helpers
++
++
++def _prefs(context):
++    addon = context.preferences.addons.get(__package__)
++    return addon.preferences if addon else None
++
++
++def _has_sticky_modifiers():
++    # RNA properties aren't Python class attributes: check the RNA definition.
++    return "sticky_modifiers" in bpy.types.WindowManager.bl_rna.properties
++
++
++def _largest_area(screen, area_type=None):
++    best = None
++    for area in screen.areas:
++        if area_type and area.type != area_type:
++            continue
++        if best is None or (area.width * area.height) > (best.width * best.height):
++            best = area
++    return best
++
++
++def _main_region(area):
++    for region in area.regions:
++        if region.type == 'WINDOW':
++            return region
++    return None
++
++
++# Mode -> (kind, name) of the context menu normally opened with right-click.
++_CONTEXT_MENUS = {
++    'OBJECT': ('MENU', "VIEW3D_MT_object_context_menu"),
++    'EDIT_MESH': ('MENU', "VIEW3D_MT_edit_mesh_context_menu"),
++    'EDIT_CURVE': ('MENU', "VIEW3D_MT_edit_curve_context_menu"),
++    'EDIT_CURVES': ('MENU', "VIEW3D_MT_edit_curves_context_menu"),
++    'EDIT_SURFACE': ('MENU', "VIEW3D_MT_edit_curve_context_menu"),
++    'EDIT_TEXT': ('MENU', "VIEW3D_MT_edit_font_context_menu"),
++    'EDIT_ARMATURE': ('MENU', "VIEW3D_MT_armature_context_menu"),
++    'EDIT_METABALL': ('MENU', "VIEW3D_MT_edit_metaball_context_menu"),
++    'EDIT_LATTICE': ('MENU', "VIEW3D_MT_edit_lattice_context_menu"),
++    'EDIT_GREASE_PENCIL': ('MENU', "VIEW3D_MT_greasepencil_edit_context_menu"),
++    'POSE': ('MENU', "VIEW3D_MT_pose_context_menu"),
++    'PARTICLE': ('MENU', "VIEW3D_MT_particle_context_menu"),
++    'SCULPT': ('PANEL', "VIEW3D_PT_sculpt_context_menu"),
++    'PAINT_VERTEX': ('PANEL', "VIEW3D_PT_paint_vertex_context_menu"),
++    'PAINT_TEXTURE': ('PANEL', "VIEW3D_PT_paint_texture_context_menu"),
++    'PAINT_WEIGHT': ('PANEL', "VIEW3D_PT_paint_weight_context_menu"),
++    'PAINT_GREASE_PENCIL': ('PANEL', "VIEW3D_PT_greasepencil_draw_context_menu"),
++    'SCULPT_GREASE_PENCIL': ('PANEL', "VIEW3D_PT_greasepencil_sculpt_context_menu"),
++    'VERTEX_GREASE_PENCIL': ('PANEL', "VIEW3D_PT_greasepencil_vertex_paint_context_menu"),
++    'WEIGHT_GREASE_PENCIL': ('PANEL', "VIEW3D_PT_greasepencil_weight_context_menu"),
++}
++
++# Mode -> "Add" menu.
++_ADD_MENUS = {
++    'OBJECT': "VIEW3D_MT_add",
++    'EDIT_MESH': "VIEW3D_MT_mesh_add",
++    'EDIT_CURVE': "VIEW3D_MT_curve_add",
++}
++
++
++# -----------------------------------------------------------------------------
++# Operators
++
++
++class TABLET_OT_search(Operator):
++    """Search menus and operators of the main editor, from anywhere (top level search)"""
++    bl_idname = "tablet.search"
++    bl_label = "Search"
++    bl_options = {'INTERNAL'}
++
++    def invoke(self, context, _event):
++        area = context.area
++        if area is None or area.type in {'TOPBAR', 'STATUSBAR'}:
++            area = _largest_area(context.screen, 'VIEW_3D') or _largest_area(context.screen)
++        if area is None:
++            return {'CANCELLED'}
++        region = _main_region(area)
++        with context.temp_override(area=area, region=region):
++            bpy.ops.wm.search_menu('INVOKE_DEFAULT')
++        return {'FINISHED'}
++
++
++class TABLET_OT_context_menu(Operator):
++    """Open the context menu of the current mode (same as right-click)"""
++    bl_idname = "tablet.context_menu"
++    bl_label = "Context Menu"
++    bl_options = {'INTERNAL'}
++
++    @classmethod
++    def poll(cls, context):
++        return context.mode in _CONTEXT_MENUS
++
++    def invoke(self, context, _event):
++        kind, name = _CONTEXT_MENUS[context.mode]
++        area = context.area if (context.area and context.area.type == 'VIEW_3D') else \
++            _largest_area(context.screen, 'VIEW_3D')
++        if area is None:
++            return {'CANCELLED'}
++        with context.temp_override(area=area, region=_main_region(area)):
++            if kind == 'MENU':
++                bpy.ops.wm.call_menu(name=name)
++            else:
++                bpy.ops.wm.call_panel(name=name, keep_open=False)
++        return {'FINISHED'}
++
++
++class TABLET_OT_touch_keyboard(Operator):
++    """Show the operating system's on-screen (touch) keyboard"""
++    bl_idname = "tablet.touch_keyboard"
++    bl_label = "On-Screen Keyboard"
++    bl_options = {'INTERNAL'}
++
++    @classmethod
++    def poll(cls, _context):
++        return sys.platform == "win32"
++
++    def execute(self, _context):
++        candidates = [
++            os.path.join(os.environ.get("CommonProgramFiles", r"C:\Program Files\Common Files"),
++                         "microsoft shared", "ink", "TabTip.exe"),
++            os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "osk.exe"),
++        ]
++        for exe in candidates:
++            if os.path.isfile(exe):
++                try:
++                    os.startfile(exe)
++                    return {'FINISHED'}
++                except OSError:
++                    continue
++        self.report({'WARNING'}, "No on-screen keyboard found")
++        return {'CANCELLED'}
++
++
++class TABLET_OT_touch_scale_toggle(Operator):
++    """Toggle larger interface elements for touch input"""
++    bl_idname = "tablet.touch_scale_toggle"
++    bl_label = "Touch Size Interface"
++    bl_options = {'INTERNAL'}
++
++    def execute(self, context):
++        prefs = _prefs(context)
++        view = context.preferences.view
++        touch_scale = prefs.touch_ui_scale if prefs else 1.3
++        view.ui_scale = 1.0 if abs(view.ui_scale - touch_scale) < 1e-3 else touch_scale
++        return {'FINISHED'}
++
++
++# -----------------------------------------------------------------------------
++# Modifier Wheel
++
++
++def _draw_modifier_toggle(layout, wm, modifier, text, icon, lock=False):
++    active = modifier in wm.sticky_modifiers
++    locked = modifier in wm.sticky_modifiers_locked
++    props = layout.operator(
++        "wm.sticky_modifier_toggle",
++        text=text,
++        icon='LOCKED' if (lock or locked) else icon,
++        depress=(locked if lock else active),
++    )
++    props.modifier = modifier
++    props.lock = lock
++
++
++class WM_MT_tablet_modifier_wheel(Menu):
++    """Floating radial menu for Ctrl / Shift / Alt / OS modifiers"""
++    bl_label = "Modifier Wheel"
++
++    def draw(self, context):
++        pie = self.layout.menu_pie()
++        wm = context.window_manager
++        if not _has_sticky_modifiers():
++            pie.label(text="Sticky modifiers unavailable in this build")
++            return
++        os_name = "Cmd" if sys.platform == "darwin" else "Win" if sys.platform == "win32" else "OS"
++        # Order: West, East, South, North, North-West, North-East, South-West, South-East.
++        _draw_modifier_toggle(pie, wm, 'CTRL', "Ctrl", 'EVENT_CTRL')
++        _draw_modifier_toggle(pie, wm, 'ALT', "Alt", 'EVENT_ALT')
++        _draw_modifier_toggle(pie, wm, 'SHIFT', "Shift", 'EVENT_SHIFT')
++        _draw_modifier_toggle(pie, wm, 'OSKEY', os_name, 'EVENT_OS')
++        _draw_modifier_toggle(pie, wm, 'CTRL', "Lock Ctrl", 'EVENT_CTRL', lock=True)
++        _draw_modifier_toggle(pie, wm, 'ALT', "Lock Alt", 'EVENT_ALT', lock=True)
++        _draw_modifier_toggle(pie, wm, 'SHIFT', "Lock Shift", 'EVENT_SHIFT', lock=True)
++        pie.operator("wm.sticky_modifier_clear", text="Release All", icon='X')
++
++
++def draw_statusbar_modifiers(self, context):
++    """Docked modifier wheel at the start of the status bar."""
++    prefs = _prefs(context)
++    if not (prefs and prefs.show_statusbar_modifiers and _has_sticky_modifiers()):
++        return
++    wm = context.window_manager
++    row = self.layout.row(align=True)
++    _draw_modifier_toggle(row, wm, 'CTRL', "", 'EVENT_CTRL')
++    _draw_modifier_toggle(row, wm, 'SHIFT', "", 'EVENT_SHIFT')
++    _draw_modifier_toggle(row, wm, 'ALT', "", 'EVENT_ALT')
++    _draw_modifier_toggle(row, wm, 'OSKEY', "", 'EVENT_OS')
++    self.layout.separator(type='LINE')
++
++
++# -----------------------------------------------------------------------------
++# Popovers
++
++
++class VIEW3D_PT_tablet_display(Panel):
++    """Shading and overlays in one touch-sized popover"""
++    bl_space_type = 'VIEW_3D'
++    bl_region_type = 'HEADER'
++    bl_label = "Display"
++    bl_ui_units_x = 11
++
++    def draw(self, context):
++        layout = self.layout
++        view = context.space_data
++        shading = view.shading
++        overlay = view.overlay
++
++        layout.label(text="Shading")
++        layout.row(align=True).prop(shading, "type", expand=True)
++        if shading.type in {'SOLID', 'WIREFRAME'}:
++            layout.prop(shading, "show_xray", text="X-Ray")
++
++        layout.separator()
++        layout.label(text="Overlays")
++        layout.prop(overlay, "show_overlays", text="Show Overlays")
++        col = layout.column()
++        col.active = overlay.show_overlays
++        col.prop(overlay, "show_floor", text="Floor")
++        col.prop(overlay, "show_wireframes", text="Wireframe")
++        col.prop(overlay, "show_face_orientation", text="Face Orientation")
++        col.prop(overlay, "show_stats", text="Statistics")
++        layout.prop(view, "show_gizmo", text="Gizmos")
++
++
++class VIEW3D_PT_tablet_sculpt(Panel):
++    """Central sculpt tool options: radius, strength, remesh and dynamic topology"""
++    bl_space_type = 'VIEW_3D'
++    bl_region_type = 'HEADER'
++    bl_label = "Sculpt"
++    bl_ui_units_x = 12
++
++    @classmethod
++    def poll(cls, context):
++        return context.mode == 'SCULPT' and context.sculpt_object is not None
++
++    def draw(self, context):
++        from bl_ui.properties_paint_common import UnifiedPaintPanel
++
++        layout = self.layout
++        obj = context.sculpt_object
++        brush = context.tool_settings.sculpt.brush
++
++        if brush is not None:
++            col = layout.column()
++            UnifiedPaintPanel.prop_unified(
++                col, context, brush, "size",
++                unified_name="use_unified_size", pressure_name="use_pressure_size",
++                text="Radius", slider=True,
++            )
++            UnifiedPaintPanel.prop_unified(
++                col, context, brush, "strength",
++                unified_name="use_unified_strength", pressure_name="use_pressure_strength",
++                text="Strength", slider=True,
++            )
++
++        layout.separator()
++        layout.label(text="Remesh")
++        row = layout.row(align=True)
++        row.prop(obj.data, "remesh_voxel_size", text="Voxel Size")
++        row.operator("object.voxel_remesh", text="Remesh")
++
++        layout.separator()
++        layout.operator(
++            "sculpt.dynamic_topology_toggle",
++            text="Dynamic Topology",
++            depress=obj.use_dynamic_topology_sculpting,
++        )
++        if obj.use_dynamic_topology_sculpting:
++            layout.prop(context.tool_settings.sculpt, "detail_size")
++
++
++# -----------------------------------------------------------------------------
++# Header / top bar drawing
++
++
++def draw_view3d_header(self, context):
++    prefs = _prefs(context)
++    if not (prefs and prefs.show_header_buttons):
++        return
++    layout = self.layout
++    mode = context.mode
++
++    layout.separator(type='LINE')
++    row = layout.row(align=True)
++    add_menu = _ADD_MENUS.get(mode)
++    if add_menu:
++        row.menu(add_menu, text="", icon='ADD')
++    if mode in _CONTEXT_MENUS:
++        row.operator("tablet.context_menu", text="", icon='COLLAPSEMENU')
++
++    row = layout.row(align=True)
++    row.operator("wm.call_menu_pie", text="", icon='VIEW3D').name = "VIEW3D_MT_view_pie"
++    row.popover(panel="VIEW3D_PT_tablet_display", text="", icon='SHADING_RENDERED')
++    if mode == 'SCULPT':
++        row.popover(panel="VIEW3D_PT_tablet_sculpt", text="", icon='SCULPTMODE_HLT')
++    row.operator("screen.screen_full_area", text="", icon='FULLSCREEN_ENTER').use_hide_panels = True
++
++    if _has_sticky_modifiers():
++        layout.operator("wm.call_menu_pie", text="", icon='EVENT_SHIFT').name = \
++            "WM_MT_tablet_modifier_wheel"
++
++
++def draw_topbar(self, context):
++    prefs = _prefs(context)
++    if not (prefs and prefs.show_topbar_buttons):
++        return
++    if context.region.alignment != 'RIGHT':
++        return
++    layout = self.layout
++
++    row = layout.row(align=True)
++    row.operator("tablet.search", text="", icon='VIEWZOOM')
++
++    row = layout.row(align=True)
++    row.operator("ed.undo", text="", icon='LOOP_BACK')
++    row.operator("ed.redo", text="", icon='LOOP_FORWARDS')
++
++    row = layout.row(align=True)
++    row.operator("wm.open_mainfile", text="", icon='FILE_FOLDER')
++    row.operator("wm.save_mainfile", text="", icon='FILE_TICK')
++
++    row = layout.row(align=True)
++    if sys.platform == "win32":
++        row.operator("tablet.touch_keyboard", text="", icon='KEYINGSET')
++    row.operator(
++        "tablet.touch_scale_toggle", text="", icon='FULLSCREEN_ENTER',
++        depress=abs(context.preferences.view.ui_scale - (prefs.touch_ui_scale)) < 1e-3,
++    )
++
++
++# -----------------------------------------------------------------------------
++# Preferences
++
++
++class TabletUXPreferences(AddonPreferences):
++    bl_idname = __package__
++
++    show_header_buttons: BoolProperty(
++        name="3D Viewport Header Buttons",
++        description="Show search, add, context menu, view pie, display, sculpt and focus buttons",
++        default=True,
++    )
++    show_topbar_buttons: BoolProperty(
++        name="Top Bar Buttons",
++        description="Show search, undo/redo, open/save, keyboard and touch size buttons",
++        default=True,
++    )
++    show_statusbar_modifiers: BoolProperty(
++        name="Status Bar Modifier Keys",
++        description="Show the docked modifier wheel (Ctrl, Shift, Alt, OS) in the status bar",
++        default=True,
++    )
++    touch_ui_scale: FloatProperty(
++        name="Touch Interface Scale",
++        description="Interface scale used by the touch size toggle",
++        default=1.3, min=1.0, max=2.0,
++    )
++
++    def draw(self, _context):
++        layout = self.layout
++        layout.use_property_split = True
++        col = layout.column(heading="Show")
++        col.prop(self, "show_header_buttons")
++        col.prop(self, "show_topbar_buttons")
++        col.prop(self, "show_statusbar_modifiers")
++        layout.prop(self, "touch_ui_scale")
++
++
++# -----------------------------------------------------------------------------
++# Registration
++
++classes = (
++    TabletUXPreferences,
++    TABLET_OT_search,
++    TABLET_OT_context_menu,
++    TABLET_OT_touch_keyboard,
++    TABLET_OT_touch_scale_toggle,
++    WM_MT_tablet_modifier_wheel,
++    VIEW3D_PT_tablet_display,
++    VIEW3D_PT_tablet_sculpt,
++)
++
++
++def register():
++    for cls in classes:
++        bpy.utils.register_class(cls)
++    bpy.types.VIEW3D_HT_header.append(draw_view3d_header)
++    bpy.types.TOPBAR_HT_upper_bar.append(draw_topbar)
++    bpy.types.STATUSBAR_HT_header.prepend(draw_statusbar_modifiers)
++
++
++def unregister():
++    bpy.types.STATUSBAR_HT_header.remove(draw_statusbar_modifiers)
++    bpy.types.TOPBAR_HT_upper_bar.remove(draw_topbar)
++    bpy.types.VIEW3D_HT_header.remove(draw_view3d_header)
++    for cls in reversed(classes):
++        bpy.utils.unregister_class(cls)
+diff --git a/source/blender/blenkernel/BKE_workspace.hh b/source/blender/blenkernel/BKE_workspace.hh
+index 6d29ae3d..a84e453a 100644
+--- a/source/blender/blenkernel/BKE_workspace.hh
++++ b/source/blender/blenkernel/BKE_workspace.hh
+@@ -33,6 +33,12 @@ struct WorkSpaceStatusItem {
+   std::string text = {};
+   float space_factor = 0.0f;
+   bool inverted = false;
++  /**
++   * Key event the item stands for (modal key-map hints), so it can be pressed by clicking the
++   * item (touch & pen input). Zero when the item isn't a key hint.
++   */
++  int16_t event_type = 0;
++  uint8_t event_modifier = 0;
+ };
+ 
+ struct WorkSpaceRuntime {
+diff --git a/source/blender/blenkernel/intern/blendfile.cc b/source/blender/blenkernel/intern/blendfile.cc
+index edfd7778..0573d25b 100644
+--- a/source/blender/blenkernel/intern/blendfile.cc
++++ b/source/blender/blenkernel/intern/blendfile.cc
+@@ -1540,6 +1540,7 @@ UserDef *BKE_blendfile_userdef_from_defaults()
+         "cycles",
+         "pose_library",
+         "bl_pkg",
++        "tablet_ux",
+     };
+     for (int i = 0; i < ARRAY_SIZE(addons); i++) {
+       bAddon *addon = BKE_addon_new();
+diff --git a/source/blender/editors/include/UI_interface_c.hh b/source/blender/editors/include/UI_interface_c.hh
+index b66ad198..2596e36e 100644
+--- a/source/blender/editors/include/UI_interface_c.hh
++++ b/source/blender/editors/include/UI_interface_c.hh
+@@ -2734,6 +2734,11 @@ bool template_event_from_keymap_item(Layout *layout,
+                                      const wmKeyMapItem *kmi,
+                                      bool text_fallback);
+ 
++/**
++ * Make key hints drawn by #template_status_bar_modal_item buttons that press their key
++ * (touch & pen input while a modal operator runs). Set around drawing, then reset.
++ */
++void template_status_bar_hints_clickable_set(bool clickable);
+ /* Draw keymap item for status bar. Returns number of items consumed,
+  * as X/Y/Z items may get merged to use less space. */
+ int template_status_bar_modal_item(Layout *layout,
+diff --git a/source/blender/editors/interface/templates/interface_template_event.cc b/source/blender/editors/interface/templates/interface_template_event.cc
+index 4315ff12..e2c94395 100644
+--- a/source/blender/editors/interface/templates/interface_template_event.cc
++++ b/source/blender/editors/interface/templates/interface_template_event.cc
+@@ -10,7 +10,10 @@
+ 
+ #include "BLT_translation.hh"
+ 
++#include "RNA_access.hh"
++
+ #include "WM_keymap.hh"
++#include "WM_types.hh"
+ 
+ #include "UI_interface_layout.hh"
+ #include "interface_intern.hh"
+@@ -39,6 +42,40 @@ static bool keymap_item_can_collapse(const wmKeyMapItem *kmi_a, const wmKeyMapIt
+           kmi_a->oskey == kmi_b->oskey && kmi_a->hyper == kmi_b->hyper);
+ }
+ 
++/**
++ * When set, key hints drawn by the status bar templates are buttons that press their key
++ * (for touch & pen input while a modal operator runs), instead of plain labels.
++ */
++static bool g_status_bar_hints_clickable = false;
++
++void template_status_bar_hints_clickable_set(const bool clickable)
++{
++  g_status_bar_hints_clickable = clickable;
++}
++
++/** A key hint: label, or a button pressing the key of \a kmi when hints are clickable. */
++static void status_hint_label(Layout *layout,
++                              const StringRef text,
++                              const int icon,
++                              const wmKeyMapItem *kmi)
++{
++  if (g_status_bar_hints_clickable && kmi && (ISKEYBOARD(kmi->type) || ISMOUSE_BUTTON(kmi->type)))
++  {
++    uint8_t modifier = 0;
++    modifier |= (kmi->shift == KM_MOD_HELD) ? KM_SHIFT : 0;
++    modifier |= (kmi->ctrl == KM_MOD_HELD) ? KM_CTRL : 0;
++    modifier |= (kmi->alt == KM_MOD_HELD) ? KM_ALT : 0;
++    modifier |= (kmi->oskey == KM_MOD_HELD) ? KM_OSKEY : 0;
++    PointerRNA ptr = layout->op("WM_OT_status_key_press", text, icon);
++    RNA_int_set(&ptr, "type", kmi->type);
++    RNA_int_set(&ptr, "modifier", modifier);
++    /* Keep the compact look of the labels. */
++    layout->block()->buttons_ptrs.last()->drawflag |= BUT_TEXT_LEFT;
++    return;
++  }
++  layout->label(text, icon);
++}
++
+ int template_status_bar_modal_item(Layout *layout,
+                                    wmOperator *op,
+                                    const wmKeyMap *keymap,
+@@ -97,13 +134,13 @@ int template_status_bar_modal_item(Layout *layout,
+           layout->separator(offset);
+         }
+       }
+-      layout->label("", icon);
++      status_hint_label(layout, "", icon, kmi);
+       layout->separator(event_icon_offset(icon));
+ 
+ #ifndef WITH_HEADLESS
+       icon = icon_from_keymap_item(kmi_y, icon_mod);
+ #endif
+-      layout->label("", icon);
++      status_hint_label(layout, "", icon, kmi_y);
+       layout->separator(event_icon_offset(icon));
+ 
+       if ((keymap->poll_modal_item == nullptr) ||
+@@ -113,7 +150,7 @@ int template_status_bar_modal_item(Layout *layout,
+ #ifndef WITH_HEADLESS
+         icon = icon_from_keymap_item(kmi_z, icon_mod);
+ #endif
+-        layout->label("", icon);
++        status_hint_label(layout, "", icon, kmi_z);
+         layout->separator(event_icon_offset(icon));
+         layout->separator(0.2f);
+       }
+@@ -148,13 +185,13 @@ int template_status_bar_modal_item(Layout *layout,
+           layout->separator(offset);
+         }
+       }
+-      layout->label("", icon);
++      status_hint_label(layout, "", icon, kmi);
+       layout->separator(event_icon_offset(icon));
+ 
+ #ifndef WITH_HEADLESS
+       icon = icon_from_keymap_item(kmi_y, icon_mod);
+ #endif
+-      layout->label("", icon);
++      status_hint_label(layout, "", icon, kmi_y);
+       layout->separator(event_icon_offset(icon));
+       layout->separator(0.2f);
+       layout->label(ab_label, ICON_NONE);
+@@ -191,7 +228,7 @@ bool template_event_from_keymap_item(Layout *layout,
+ 
+     /* Icon and text separately is closer together with aligned layout. */
+ 
+-    layout->label("", icon);
++    status_hint_label(layout, "", icon, kmi);
+     if (icon >= ICON_MOUSE_LMB && icon <= ICON_MOUSE_MMB_SCROLL) {
+       /* Negative space after narrow mice icons. */
+       layout->separator(-0.68f);
+@@ -203,7 +240,8 @@ bool template_event_from_keymap_item(Layout *layout,
+     }
+ 
+     layout->separator(0.2f);
+-    layout->label(CTX_IFACE_(BLT_I18NCONTEXT_ID_WINDOWMANAGER, text.c_str()), ICON_NONE);
++    status_hint_label(
++        layout, CTX_IFACE_(BLT_I18NCONTEXT_ID_WINDOWMANAGER, text.c_str()), ICON_NONE, kmi);
+     layout->separator(0.6f);
+     ok = true;
+   }
+diff --git a/source/blender/editors/interface/templates/interface_template_status.cc b/source/blender/editors/interface/templates/interface_template_status.cc
+index 49c0399a..aa367051 100644
+--- a/source/blender/editors/interface/templates/interface_template_status.cc
++++ b/source/blender/editors/interface/templates/interface_template_status.cc
+@@ -29,6 +29,8 @@
+ #include "DNA_space_types.h"
+ #include "DNA_workspace_types.h"
+ 
++#include "RNA_access.hh"
++
+ #include "ED_info.hh"
+ #include "ED_screen_types.hh"
+ 
+@@ -264,20 +266,51 @@ static bool uiTemplateInputStatus3DView(bContext *C, Layout *row)
+   return false;
+ }
+ 
++/**
++ * Clickable Confirm / Cancel buttons for the running modal operator, for touch & pen input
++ * without a keyboard. They press Return / Escape for the operator.
++ */
++static void template_status_modal_confirm_cancel(Layout &layout)
++{
++  Layout &row = layout.row(true);
++  row.emboss_set(EmbossType::None);
++  PointerRNA ptr = row.op("WM_OT_status_key_press", IFACE_("Confirm"), ICON_CHECKMARK);
++  RNA_int_set(&ptr, "type", EVT_RETKEY);
++  ptr = row.op("WM_OT_status_key_press", IFACE_("Cancel"), ICON_CANCEL);
++  RNA_int_set(&ptr, "type", EVT_ESCKEY);
++  layout.separator(0.5f, LayoutSeparatorType::Line);
++}
++
+ void uiTemplateInputStatus(Layout *layout, bContext *C)
+ {
+   wmWindow *win = CTX_wm_window(C);
+   WorkSpace *workspace = CTX_wm_workspace(C);
++  /* While a modal operator runs, its key hints can be clicked (touch & pen input). */
++  const bool modal_running = WM_window_modal_operator_running(win);
+ 
+   /* Workspace status text has priority. */
+   if (!workspace->runtime->status.is_empty()) {
++    if (modal_running) {
++      template_status_modal_confirm_cancel(*layout);
++    }
+     Layout &row = layout->row(true);
++    row.emboss_set(EmbossType::None);
+     for (const bke::WorkSpaceStatusItem &item : workspace->runtime->status) {
+       if (item.space_factor != 0.0f) {
+         row.separator(item.space_factor);
+       }
+       else {
+-        Button *but = uiItemL_ex(&row, item.text, item.icon, false, false);
++        Button *but;
++        if (modal_running && item.event_type != 0) {
++          PointerRNA ptr = row.op("WM_OT_status_key_press", item.text, item.icon);
++          RNA_int_set(&ptr, "type", item.event_type);
++          RNA_int_set(&ptr, "modifier", item.event_modifier);
++          but = row.block()->buttons_ptrs.last().get();
++          but->drawflag |= BUT_TEXT_LEFT;
++        }
++        else {
++          but = uiItemL_ex(&row, item.text, item.icon, false, false);
++        }
+         if (item.inverted) {
+           but->drawflag |= BUT_ICON_INVERT;
+         }
+@@ -290,6 +323,9 @@ void uiTemplateInputStatus(Layout *layout, bContext *C)
+     return;
+   }
+ 
++  if (modal_running) {
++    template_status_modal_confirm_cancel(*layout);
++  }
+   if (WM_window_modal_keymap_status_draw(C, win, *layout)) {
+     return;
+   }
+diff --git a/source/blender/editors/screen/area.cc b/source/blender/editors/screen/area.cc
+index b598a30f..ffb4a851 100644
+--- a/source/blender/editors/screen/area.cc
++++ b/source/blender/editors/screen/area.cc
+@@ -1125,6 +1125,8 @@ void WorkspaceStatus::modal_keymap(std::string text,
+   if (kmi == nullptr) {
+     return;
+   }
++  /* Items added below get the key they stand for, making them clickable. */
++  const int64_t first_item = workspace_ ? workspace_->runtime->status.size() : 0;
+ 
+ #ifdef WITH_HEADLESS
+   int icon = 0;
+@@ -1148,6 +1150,21 @@ void WorkspaceStatus::modal_keymap(std::string text,
+   }
+   ed_workspace_status_icon_item(workspace_, icon, inverted);
+   ed_workspace_status_text_item(workspace_, std::move(text));
++
++  if (workspace_ && (ISKEYBOARD(kmi->type) || ISMOUSE_BUTTON(kmi->type))) {
++    uint8_t modifier = 0;
++    modifier |= (kmi->shift == KM_MOD_HELD) ? KM_SHIFT : 0;
++    modifier |= (kmi->ctrl == KM_MOD_HELD) ? KM_CTRL : 0;
++    modifier |= (kmi->alt == KM_MOD_HELD) ? KM_ALT : 0;
++    modifier |= (kmi->oskey == KM_MOD_HELD) ? KM_OSKEY : 0;
++    MutableSpan<bke::WorkSpaceStatusItem> items = workspace_->runtime->status.as_mutable_span();
++    for (const int64_t i : IndexRange(first_item, items.size() - first_item)) {
++      if (items[i].space_factor == 0.0f) {
++        items[i].event_type = int16_t(kmi->type);
++        items[i].event_modifier = modifier;
++      }
++    }
++  }
+ }
+ 
+ void ED_workspace_status_text(bContext *C, const char *str)
+diff --git a/source/blender/makesrna/RNA_enum_items.hh b/source/blender/makesrna/RNA_enum_items.hh
+index c1b01d5d..39f66751 100644
+--- a/source/blender/makesrna/RNA_enum_items.hh
++++ b/source/blender/makesrna/RNA_enum_items.hh
+@@ -104,6 +104,7 @@ DEF_ENUM(rna_enum_motionpath_range_items)
+ 
+ DEF_ENUM(rna_enum_event_value_items)
+ DEF_ENUM(rna_enum_event_direction_items)
++DEF_ENUM(rna_enum_sticky_modifier_items)
+ 
+ DEF_ENUM(rna_enum_event_type_items)
+ DEF_ENUM(rna_enum_event_type_mask_items)
+diff --git a/source/blender/makesrna/intern/rna_wm.cc b/source/blender/makesrna/intern/rna_wm.cc
+index 7ec9c18f..7e586fd5 100644
+--- a/source/blender/makesrna/intern/rna_wm.cc
++++ b/source/blender/makesrna/intern/rna_wm.cc
+@@ -25,6 +25,7 @@
+ 
+ #include "UI_interface_c.hh"
+ #include "UI_interface_layout.hh"
++#include "UI_resources.hh"
+ 
+ #include "WM_api.hh"
+ #include "WM_keymap.hh"
+@@ -497,6 +498,15 @@ const EnumPropertyItem rna_enum_event_value_items[] = {
+     {0, nullptr, 0, nullptr, nullptr},
+ };
+ 
++/** Modifier keys that can be held from the screen (sticky modifiers, for touch & pen input). */
++const EnumPropertyItem rna_enum_sticky_modifier_items[] = {
++    {KM_CTRL, "CTRL", ICON_EVENT_CTRL, "Ctrl", ""},
++    {KM_SHIFT, "SHIFT", ICON_EVENT_SHIFT, "Shift", ""},
++    {KM_ALT, "ALT", ICON_EVENT_ALT, "Alt", ""},
++    {KM_OSKEY, "OSKEY", ICON_EVENT_OS, "OS Key", ""},
++    {0, nullptr, 0, nullptr, nullptr},
++};
++
+ const EnumPropertyItem rna_enum_event_direction_items[] = {
+     {KM_ANY, "ANY", 0, "Any", ""},
+     {KM_DIRECTION_N, "NORTH", 0, "North", ""},
+@@ -1518,6 +1528,16 @@ static bool rna_KeyMapItem_userdefined_get(PointerRNA *ptr)
+   return kmi->id < 0;
+ }
+ 
++static int rna_WindowManager_sticky_modifiers_get(PointerRNA * /*ptr*/)
++{
++  return int(WM_sticky_modifiers_get());
++}
++
++static int rna_WindowManager_sticky_modifiers_locked_get(PointerRNA * /*ptr*/)
++{
++  return int(WM_sticky_modifiers_locked_get());
++}
++
+ static void rna_WindowManager_operators_begin(CollectionPropertyIterator *iter, PointerRNA *ptr)
+ {
+   wmWindowManager *wm = static_cast<wmWindowManager *>(ptr->data);
+@@ -3012,6 +3032,25 @@ static void rna_def_windowmanager(BlenderRNA *brna)
+                                     nullptr);
+   RNA_def_property_ui_text(prop, "Reports", "Collection of reports");
+ 
++  prop = RNA_def_property(srna, "sticky_modifiers", PROP_ENUM, PROP_NONE);
++  RNA_def_property_flag(prop, PROP_ENUM_FLAG);
++  RNA_def_property_enum_items(prop, rna_enum_sticky_modifier_items);
++  RNA_def_property_clear_flag(prop, PROP_EDITABLE);
++  RNA_def_property_enum_funcs(prop, "rna_WindowManager_sticky_modifiers_get", nullptr, nullptr);
++  RNA_def_property_ui_text(prop,
++                           "Sticky Modifiers",
++                           "Modifier keys held from the screen for touch and pen input "
++                           "(one-shot or locked), see wm.sticky_modifier_toggle");
++
++  prop = RNA_def_property(srna, "sticky_modifiers_locked", PROP_ENUM, PROP_NONE);
++  RNA_def_property_flag(prop, PROP_ENUM_FLAG);
++  RNA_def_property_enum_items(prop, rna_enum_sticky_modifier_items);
++  RNA_def_property_clear_flag(prop, PROP_EDITABLE);
++  RNA_def_property_enum_funcs(
++      prop, "rna_WindowManager_sticky_modifiers_locked_get", nullptr, nullptr);
++  RNA_def_property_ui_text(
++      prop, "Locked Sticky Modifiers", "Sticky modifiers held until toggled off");
++
+   prop = RNA_def_property(srna, "windows", PROP_COLLECTION, PROP_NONE);
+   RNA_def_property_struct_type(prop, "Window");
+   RNA_def_property_ui_text(prop, "Windows", "Open windows");
+diff --git a/source/blender/windowmanager/WM_api.hh b/source/blender/windowmanager/WM_api.hh
+index 18099d54..10132dff 100644
+--- a/source/blender/windowmanager/WM_api.hh
++++ b/source/blender/windowmanager/WM_api.hh
+@@ -978,6 +978,30 @@ void WM_global_reportf(eReportType type, const char *format, ...) ATTR_PRINTF_FO
+ 
+ wmEvent *WM_event_add(wmWindow *win, const wmEvent *event_to_add) ATTR_NONNULL(1, 2);
+ 
++/**
++ * Add a key (or mouse button) press and release to the window's event queue, as if it was
++ * pressed with \a modifier held. Used by clickable status bar key hints for touch input.
++ */
++void WM_event_add_key_press(wmWindow *win, wmEventType type, wmEventModifierFlag modifier)
++    ATTR_NONNULL(1);
++
++/**
++ * Sticky modifiers: modifier keys held from the screen for touch & pen input
++ * (the "Modifier Wheel"). A one-shot modifier applies until the next mouse button release
++ * or key press, a locked modifier until toggled off.
++ */
++wmEventModifierFlag WM_sticky_modifiers_get();
++wmEventModifierFlag WM_sticky_modifiers_locked_get();
++/**
++ * Cycle \a modifier: off -> one-shot -> locked -> off.
++ * When \a lock is set, toggle between locked and off directly.
++ */
++void WM_sticky_modifier_toggle(wmEventModifierFlag modifier, bool lock);
++void WM_sticky_modifiers_clear();
++
++/** True when a modal operator (not only UI popups) is running in \a win. */
++bool WM_window_modal_operator_running(const wmWindow *win) ATTR_NONNULL(1);
++
+ void wm_event_init_from_window(wmWindow *win, wmEvent *event);
+ 
+ /**
+diff --git a/source/blender/windowmanager/WM_types.hh b/source/blender/windowmanager/WM_types.hh
+index 83cd1af0..2430d723 100644
+--- a/source/blender/windowmanager/WM_types.hh
++++ b/source/blender/windowmanager/WM_types.hh
+@@ -755,6 +755,11 @@ enum eWM_EventFlag {
+    * even when the threshold has not been met.
+    */
+   WM_EVENT_FORCE_DRAG_THRESHOLD = (1 << 3),
++  /**
++   * Key press added by #WM_event_add_key_press (e.g. clicking a status bar key hint).
++   * Always goes to the running modal operator, even when the cursor is over the status bar.
++   */
++  WM_EVENT_IS_KEY_PRESS_ADDED = (1 << 4),
+ };
+ ENUM_OPERATORS(eWM_EventFlag);
+ 
+diff --git a/source/blender/windowmanager/intern/wm_event_system.cc b/source/blender/windowmanager/intern/wm_event_system.cc
+index 036ffac5..efe9404c 100644
+--- a/source/blender/windowmanager/intern/wm_event_system.cc
++++ b/source/blender/windowmanager/intern/wm_event_system.cc
+@@ -3498,6 +3498,9 @@ static eHandlerActionFlag wm_handlers_do_gizmo_handler(bContext *C,
+ /** \name Handle Single Event (All Handler Types)
+  * \{ */
+ 
++/** See #wm_event_status_bar_bypass_modal. */
++static bool g_skip_modal_operator_handlers = false;
++
+ static eHandlerActionFlag wm_handlers_do_intern(bContext *C,
+                                                 wmWindow *win,
+                                                 wmEvent *event,
+@@ -3528,6 +3531,12 @@ static eHandlerActionFlag wm_handlers_do_intern(bContext *C,
+   {
+     handler_base_next = handler_base->next;
+ 
++    /* Mouse input on the clickable status bar skips running modal operators
++     * (but not UI handlers: an active status bar button handles its click through those). */
++    if (g_skip_modal_operator_handlers && (handler_base->type == WM_HANDLER_TYPE_OP)) {
++      continue;
++    }
++
+     /* During this loop, UI handlers for nested menus can tag multiple handlers free. */
+     if (handler_base->flag & WM_HANDLER_DO_FREE) {
+       /* Pass. */
+@@ -4241,6 +4250,173 @@ static eHandlerActionFlag wm_event_do_handlers_area_regions(bContext *C,
+   return wm_event_do_region_handlers(C, event, region_hovered);
+ }
+ 
++/* -------------------------------------------------------------------- */
++/** \name Tablet Input: Sticky Modifiers & Clickable Status Bar
++ *
++ * Touch and pen input without a keyboard (see the "Beyond Mouse and Keyboard" tablet plan):
++ * - Sticky modifiers ("Modifier Wheel"): Ctrl / Shift / Alt / OS held from the screen.
++ *   They are added to events when they are handled, never stored in the window event-state,
++ *   so they can't leak into (or get stuck in) the real keyboard modifier state.
++ * - Clickable status bar: while a modal operator runs, mouse input that starts over the
++ *   status bar goes to the status bar (whose key hints are buttons injecting their key)
++ *   instead of the modal operator.
++ * \{ */
++
++static wmEventModifierFlag g_sticky_modifier_oneshot = wmEventModifierFlag(0);
++static wmEventModifierFlag g_sticky_modifier_locked = wmEventModifierFlag(0);
++/** Set when the sticky state changes while handling an event, so that event doesn't consume it. */
++static bool g_sticky_modifier_changed = false;
++/** A mouse button press started over the status bar while a modal operator was running. */
++static bool g_status_bar_press_active = false;
++
++wmEventModifierFlag WM_sticky_modifiers_get()
++{
++  return g_sticky_modifier_oneshot | g_sticky_modifier_locked;
++}
++
++wmEventModifierFlag WM_sticky_modifiers_locked_get()
++{
++  return g_sticky_modifier_locked;
++}
++
++void WM_sticky_modifier_toggle(const wmEventModifierFlag modifier, const bool lock)
++{
++  const bool is_locked = (g_sticky_modifier_locked & modifier) != 0;
++  const bool is_oneshot = (g_sticky_modifier_oneshot & modifier) != 0;
++  g_sticky_modifier_oneshot &= ~modifier;
++  g_sticky_modifier_locked &= ~modifier;
++  if (lock) {
++    if (!is_locked) {
++      g_sticky_modifier_locked |= modifier;
++    }
++  }
++  else if (is_oneshot) {
++    g_sticky_modifier_locked |= modifier;
++  }
++  else if (!is_locked) {
++    g_sticky_modifier_oneshot |= modifier;
++  }
++  g_sticky_modifier_changed = true;
++  WM_main_add_notifier(NC_WINDOW, nullptr);
++}
++
++void WM_sticky_modifiers_clear()
++{
++  g_sticky_modifier_oneshot = wmEventModifierFlag(0);
++  g_sticky_modifier_locked = wmEventModifierFlag(0);
++  g_sticky_modifier_changed = true;
++  WM_main_add_notifier(NC_WINDOW, nullptr);
++}
++
++/** Add the sticky modifiers to an event about to be handled. */
++static void wm_event_sticky_modifiers_apply(wmEvent *event)
++{
++  const wmEventModifierFlag sticky = WM_sticky_modifiers_get();
++  if (sticky == 0) {
++    return;
++  }
++  event->modifier |= sticky;
++  /* Click-drag events take the modifiers of the press. */
++  event->prev_press_modifier |= sticky;
++}
++
++/** After an event was handled: a completed click or a key press consumes one-shot modifiers. */
++static void wm_event_sticky_modifiers_consume(const wmEvent *event)
++{
++  if (g_sticky_modifier_changed) {
++    /* Changed by this very event (e.g. clicking a modifier toggle): keep it for the next one. */
++    g_sticky_modifier_changed = false;
++    return;
++  }
++  if (g_sticky_modifier_oneshot == 0) {
++    return;
++  }
++  const bool is_button_release = ISMOUSE_BUTTON(event->type) && (event->val == KM_RELEASE);
++  const bool is_key_press = ISKEYBOARD(event->type) && !ISKEYMODIFIER(event->type) &&
++                            (event->val == KM_PRESS);
++  if (is_button_release || is_key_press) {
++    g_sticky_modifier_oneshot = wmEventModifierFlag(0);
++    WM_main_add_notifier(NC_WINDOW, nullptr);
++  }
++}
++
++bool WM_window_modal_operator_running(const wmWindow *win)
++{
++  for (const wmEventHandler &handler_base : win->runtime->modalhandlers) {
++    if (handler_base.type == WM_HANDLER_TYPE_OP) {
++      const wmEventHandler_Op *handler = reinterpret_cast<const wmEventHandler_Op *>(
++          &handler_base);
++      if (handler->op != nullptr) {
++        return true;
++      }
++    }
++  }
++  return false;
++}
++
++void WM_event_add_key_press(wmWindow *win, const wmEventType type, wmEventModifierFlag modifier)
++{
++  wmEvent event = *win->runtime->eventstate;
++  event.flag = WM_EVENT_IS_KEY_PRESS_ADDED;
++  event.prev_type = event.type;
++  event.prev_val = event.val;
++  event.type = type;
++  event.modifier = modifier;
++  event.keymodifier = EVENT_NONE;
++  event.utf8_buf[0] = '\0';
++  event.customdata = nullptr;
++  event.val = KM_PRESS;
++  wm_event_add_intern(win, &event);
++  event.prev_type = type;
++  event.prev_val = KM_PRESS;
++  event.val = KM_RELEASE;
++  wm_event_add_intern(win, &event);
++}
++
++/** True when \a xy is over the status bar of \a win while a modal operator runs. */
++static bool wm_status_bar_modal_hit(wmWindow *win, const int xy[2])
++{
++  if (!WM_window_modal_operator_running(win)) {
++    return false;
++  }
++  bScreen *screen = WM_window_get_active_screen(win);
++  ScrArea *status_area = screen ? WM_window_status_area_find(win, screen) : nullptr;
++  return status_area && BLI_rcti_isect_pt_v(&status_area->totrct, xy);
++}
++
++/** The press event a hover mouse-move was already added for, see #wm_event_do_handlers. */
++static const wmEvent *g_status_bar_press_hover_added = nullptr;
++
++/**
++ * True when \a event should skip the window's modal handlers and go to the status bar.
++ * Only mouse input: hovering highlights the key hint buttons, and a click that *starts* on
++ * the status bar is delivered there (so a drag released over it still ends the operator).
++ */
++static bool wm_event_status_bar_bypass_modal(wmWindow *win, const wmEvent *event)
++{
++  const bool is_button = ISMOUSE_BUTTON(event->type);
++  if (!is_button && !ISMOUSE_MOTION(event->type)) {
++    return false;
++  }
++  if (event->flag & WM_EVENT_IS_KEY_PRESS_ADDED) {
++    /* Pressed through a status bar button: meant for the modal operator. */
++    return false;
++  }
++  if (is_button && (event->val == KM_RELEASE) && g_status_bar_press_active) {
++    g_status_bar_press_active = false;
++    return true;
++  }
++  if (!wm_status_bar_modal_hit(win, event->xy)) {
++    return false;
++  }
++  if (is_button && (event->val == KM_PRESS)) {
++    g_status_bar_press_active = true;
++  }
++  return true;
++}
++
++/** \} */
++
+ void wm_event_do_handlers(bContext *C)
+ {
+   PRF_scope(ProfileCategory::Core);
+@@ -4297,6 +4473,17 @@ void wm_event_do_handlers(bContext *C)
+           event->flag |= WM_EVENT_FORCE_DRAG_THRESHOLD;
+         }
+       }
++      /* A tap on the clickable status bar during a modal operator arrives as "move + press":
++       * the status bar may still have a stale active button (its exit mouse-move went to the
++       * modal operator). Handle one more mouse-move first, so the button under the cursor is
++       * activated before the press. */
++      if (ISMOUSE_BUTTON(event->type) && (event->val == KM_PRESS) &&
++          !(event->flag & WM_EVENT_IS_KEY_PRESS_ADDED) &&
++          (g_status_bar_press_hover_added != event) && wm_status_bar_modal_hit(&win, event->xy))
++      {
++        g_status_bar_press_hover_added = event;
++        event = wm_event_add_mousemove_to_head(&win);
++      }
+       const bool event_queue_check_drag_prev = win.event_queue_check_drag;
+ 
+       {
+@@ -4340,6 +4527,9 @@ void wm_event_do_handlers(bContext *C)
+ 
+       CTX_wm_window_set(C, &win);
+ 
++      /* Modifiers held from the screen (touch & pen input). */
++      wm_event_sticky_modifiers_apply(event);
++
+ #ifdef WITH_XR_OPENXR
+       if (event->type == EVT_XR_ACTION) {
+         wm_event_handle_xrevent(wm, &win, event, C);
+@@ -4371,8 +4561,11 @@ void wm_event_do_handlers(bContext *C)
+ 
+       wm_region_mouse_co(C, event);
+ 
+-      /* First we do priority handlers, modal + some limited key-maps. */
++      /* First we do priority handlers, modal + some limited key-maps.
++       * Mouse input meant for the (clickable) status bar skips the modal operators. */
++      g_skip_modal_operator_handlers = wm_event_status_bar_bypass_modal(&win, event);
+       action |= wm_handlers_do(C, event, &win.runtime->modalhandlers);
++      g_skip_modal_operator_handlers = false;
+ 
+       /* File-read case. */
+       if (CTX_wm_window(C) == nullptr) {
+@@ -4494,6 +4687,9 @@ void wm_event_do_handlers(bContext *C)
+       /* Update previous mouse position for following events to use. */
+       copy_v2_v2_int(win.runtime->eventstate->prev_xy, event->xy);
+ 
++      /* A completed click or key press consumes one-shot sticky modifiers. */
++      wm_event_sticky_modifiers_consume(event);
++
+       /* Un-link and free here, Blender-quit then frees all. */
+       BLI_remlink(&win.runtime->event_queue, event);
+       wm_event_free_last_handled(&win, event);
+@@ -7062,6 +7258,9 @@ bool WM_window_modal_keymap_status_draw(bContext *C, wmWindow *win, ui::Layout &
+   const EnumPropertyItem *items = static_cast<const EnumPropertyItem *>(keymap->modal_items);
+ 
+   ui::Layout &row = layout.row(true);
++  /* Key hints are buttons pressing their key, for touch & pen input. */
++  row.emboss_set(ui::EmbossType::None);
++  ui::template_status_bar_hints_clickable_set(true);
+   for (int i = 0; items[i].identifier; i++) {
+     if (!items[i].identifier[0]) {
+       continue;
+@@ -7084,6 +7283,7 @@ bool WM_window_modal_keymap_status_draw(bContext *C, wmWindow *win, ui::Layout &
+       row.label(fmt::format("{}: {}", *str, items[i].name), ICON_NONE);
+     }
+   }
++  ui::template_status_bar_hints_clickable_set(false);
+   return true;
+ }
+ 
+diff --git a/source/blender/windowmanager/intern/wm_operators.cc b/source/blender/windowmanager/intern/wm_operators.cc
+index e5181211..14aebf54 100644
+--- a/source/blender/windowmanager/intern/wm_operators.cc
++++ b/source/blender/windowmanager/intern/wm_operators.cc
+@@ -2205,6 +2205,89 @@ static void WM_OT_search_menu(wmOperatorType *ot)
+   ot->poll = WM_operator_winactive;
+ }
+ 
++/* -------------------------------------------------------------------- */
++/** \name Tablet Input Operators
++ *
++ * Sticky (on-screen) modifiers and key presses from the status bar, for touch & pen input.
++ * \{ */
++
++static wmOperatorStatus wm_sticky_modifier_toggle_exec(bContext * /*C*/, wmOperator *op)
++{
++  const wmEventModifierFlag modifier = wmEventModifierFlag(RNA_enum_get(op->ptr, "modifier"));
++  WM_sticky_modifier_toggle(modifier, RNA_boolean_get(op->ptr, "lock"));
++  return OPERATOR_FINISHED;
++}
++
++static void WM_OT_sticky_modifier_toggle(wmOperatorType *ot)
++{
++  ot->name = "Toggle Sticky Modifier";
++  ot->idname = "WM_OT_sticky_modifier_toggle";
++  ot->description =
++      "Hold a modifier key from the screen: for the next click, then locked, then off "
++      "(for touch and pen input)";
++
++  ot->exec = wm_sticky_modifier_toggle_exec;
++
++  PropertyRNA *prop;
++  prop = RNA_def_enum(
++      ot->srna, "modifier", rna_enum_sticky_modifier_items, KM_SHIFT, "Modifier", "");
++  RNA_def_property_flag(prop, PROP_SKIP_SAVE);
++  prop = RNA_def_boolean(ot->srna,
++                         "lock",
++                         false,
++                         "Lock",
++                         "Toggle between locked and off instead of cycling through one-shot");
++  RNA_def_property_flag(prop, PROP_SKIP_SAVE);
++}
++
++static wmOperatorStatus wm_sticky_modifier_clear_exec(bContext * /*C*/, wmOperator * /*op*/)
++{
++  WM_sticky_modifiers_clear();
++  return OPERATOR_FINISHED;
++}
++
++static void WM_OT_sticky_modifier_clear(wmOperatorType *ot)
++{
++  ot->name = "Release Sticky Modifiers";
++  ot->idname = "WM_OT_sticky_modifier_clear";
++  ot->description = "Release all modifier keys held from the screen";
++
++  ot->exec = wm_sticky_modifier_clear_exec;
++}
++
++static wmOperatorStatus wm_status_key_press_exec(bContext *C, wmOperator *op)
++{
++  wmWindow *win = CTX_wm_window(C);
++  if (win == nullptr) {
++    return OPERATOR_CANCELLED;
++  }
++  const wmEventType type = wmEventType(RNA_int_get(op->ptr, "type"));
++  if (!(ISKEYBOARD(type) || ISMOUSE_BUTTON(type))) {
++    return OPERATOR_CANCELLED;
++  }
++  const wmEventModifierFlag modifier = wmEventModifierFlag(RNA_int_get(op->ptr, "modifier"));
++  WM_event_add_key_press(win, type, modifier);
++  return OPERATOR_FINISHED;
++}
++
++static void WM_OT_status_key_press(wmOperatorType *ot)
++{
++  ot->name = "Press Key";
++  ot->idname = "WM_OT_status_key_press";
++  ot->description = "Press this key for the running tool (for touch and pen input)";
++
++  ot->exec = wm_status_key_press_exec;
++  ot->flag = OPTYPE_INTERNAL;
++
++  PropertyRNA *prop;
++  prop = RNA_def_int(ot->srna, "type", 0, 0, INT16_MAX, "Type", "Event type", 0, INT16_MAX);
++  RNA_def_property_flag(prop, PROP_HIDDEN | PROP_SKIP_SAVE);
++  prop = RNA_def_int(ot->srna, "modifier", 0, 0, 255, "Modifier", "Modifier flags", 0, 255);
++  RNA_def_property_flag(prop, PROP_HIDDEN | PROP_SKIP_SAVE);
++}
++
++/** \} */
++
+ static void WM_OT_search_operator(wmOperatorType *ot)
+ {
+   ot->name = "Search Operator";
+@@ -4387,6 +4470,9 @@ void wm_operatortypes_register()
+   WM_operatortype_append(WM_OT_splash);
+   WM_operatortype_append(WM_OT_splash_about);
+   WM_operatortype_append(WM_OT_search_menu);
++  WM_operatortype_append(WM_OT_sticky_modifier_toggle);
++  WM_operatortype_append(WM_OT_sticky_modifier_clear);
++  WM_operatortype_append(WM_OT_status_key_press);
+   WM_operatortype_append(WM_OT_search_operator);
+   WM_operatortype_append(WM_OT_search_single_menu);
+   WM_operatortype_append(WM_OT_call_menu);
