@@ -23,7 +23,7 @@ permissions:
   contents: write   # needed to attach the .ipa to a Release
 
 env:
-  BLENDER_COMMIT: d9b6fe34ddce527d93b97c0bf42ad92cebac4e4e
+  BLENDER_COMMIT: a1de44dd54af75a4c8c4a29a5fed2a1334a87446
 
 jobs:
   build:

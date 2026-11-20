@@ -8,7 +8,7 @@ Questo documento riassume i commit, le modifiche architetturali alla UI e al sis
 
 - **Repository Ufficiale:** [projects.blender.org/blender/blender](https://projects.blender.org/blender/blender)
 - **Branch Ufficiale `ios`:**
-  - Commit di riferimento: `d9b6fe34ddce527d93b97c0bf42ad92cebac4e4e` / `a1de44dd54af75a4c8c4a29a5fed2a1334a87446`
+  - Commit di riferimento: `a1de44dd54af75a4c8c4a29a5fed2a1334a87446` (Blender 5.1.2 Release)
   - Include la base per compilare Blender su architettura Apple Silicon iOS (librerie precompilate `ios_arm64`, patch per FFmpeg, OpenColorIO, OpenImageIO, Python 3.11/3.13, USD).
 - **Branch Ufficiale Sperimentale `ios-workshop`:**
   - `97232b0f` — *WIP: Experimental editor dock #144945* (Docking modulare per schermi touch)

@@ -24,7 +24,7 @@ pinned commit** + this repo's [patch](patches/blender-ipad.patch) + [icon](ios/i
 # 1. Get the exact upstream source this build is based on (Blender uses git LFS)
 git clone https://projects.blender.org/blender/blender.git
 cd blender
-git checkout d9b6fe34ddce527d93b97c0bf42ad92cebac4e4e   # the pinned 'ios'-branch commit
+git checkout a1de44dd54af75a4c8c4a29a5fed2a1334a87446   # the pinned 'ios'-branch commit (Blender 5.1.2)
 git lfs install && git lfs pull                          # pulls startup.blend etc.
 
 # 2. Download Blender's precompiled iOS libraries (the key flag is --use-ios-libraries)

@@ -1,8 +1,8 @@
 diff --git a/build_files/cmake/platform/platform_apple.cmake b/build_files/cmake/platform/platform_apple.cmake
-index ece1c7cf426..ec666786c4b 100644
+index 79b1287..63e70ae 100644
 --- a/build_files/cmake/platform/platform_apple.cmake
 +++ b/build_files/cmake/platform/platform_apple.cmake
-@@ -178,7 +178,7 @@ if(WITH_APPLE_CROSSPLATFORM)
+@@ -181,7 +181,7 @@ if(WITH_APPLE_CROSSPLATFORM)
    endif()
  else()
    if(NOT EXISTS "${LIBDIR}/python/")
@@ -12,11 +12,11 @@ index ece1c7cf426..ec666786c4b 100644
  endif()
  if(FIRST_RUN)
 diff --git a/intern/ghost/intern/GHOST_WindowIOS.mm b/intern/ghost/intern/GHOST_WindowIOS.mm
-index 272c21b1cd1..8fda77f6e06 100644
+index 56d2ffa..afca91d 100644
 --- a/intern/ghost/intern/GHOST_WindowIOS.mm
 +++ b/intern/ghost/intern/GHOST_WindowIOS.mm
-@@ -10,9 +10,11 @@
- #include "GHOST_C-api.h"
+@@ -9,9 +9,11 @@
+ 
  #include "GHOST_Debug.hh"
  #include "GHOST_EventButton.hh"
 +#include "GHOST_WindowManager.hh"
@@ -27,7 +27,7 @@ index 272c21b1cd1..8fda77f6e06 100644
  #include "GHOST_EventTouch.hh"
  #include "GHOST_EventTrackpad.hh"
  
-@@ -24,6 +26,8 @@
+@@ -23,6 +25,8 @@
  
  #include <unordered_map>
  
@@ -36,7 +36,7 @@ index 272c21b1cd1..8fda77f6e06 100644
  // #define IOS_INPUT_LOGGING
  #if defined(IOS_INPUT_LOGGING)
  #  define IOS_INPUT_LOG(...) NSLog(__VA_ARGS__)
-@@ -31,6 +35,13 @@
+@@ -30,6 +34,13 @@
  #  define IOS_INPUT_LOG(...)
  #endif
  
@@ -50,7 +50,7 @@ index 272c21b1cd1..8fda77f6e06 100644
  // #define IOS_WINDOW_LOGGING
  #if defined(IOS_WINDOW_LOGGING)
  #  define IOS_WINDOW_LOG(...) NSLog(__VA_ARGS__)
-@@ -122,16 +133,51 @@ typedef struct UserInputEvent {
+@@ -121,16 +132,51 @@ typedef struct UserInputEvent {
  @interface GHOSTUIPanGestureRecognizer : UIPanGestureRecognizer
  {
    CGPoint cached_translation;
@@ -102,7 +102,7 @@ index 272c21b1cd1..8fda77f6e06 100644
  - (CGPoint)getScaledTouchPoint:(GHOST_WindowIOS *)window
  {
    CGPoint touch_point = [self locationInView:window->getView()];
-@@ -240,7 +286,12 @@ typedef struct UserInputEvent {
+@@ -239,7 +285,12 @@ typedef struct UserInputEvent {
    GHOSTUITapGestureRecognizer *tap4f_gesture_recognizer;
    GHOSTUIPanGestureRecognizer *pan_gesture_recognizer;
    GHOSTUIPanGestureRecognizer *pan2f_gesture_recognizer;
@@ -115,7 +115,7 @@ index 272c21b1cd1..8fda77f6e06 100644
    GHOSTUIHoverGestureRecognizer *hover_gesture_recognizer;
    UIPencilInteraction *pencil_interaction;
    UIScreenEdgePanGestureRecognizer *edge_swipe_left;
-@@ -259,6 +310,30 @@ typedef struct UserInputEvent {
+@@ -258,6 +309,30 @@ typedef struct UserInputEvent {
    const char *text_field_string;
    GHOST_KeyboardProperties current_keyboard_properties;
    bool external_keyboard_connected;
@@ -146,7 +146,7 @@ index 272c21b1cd1..8fda77f6e06 100644
  
    /* Toolbar */
    bool toolbar_enabled;
-@@ -282,7 +357,9 @@ typedef struct UserInputEvent {
+@@ -281,7 +356,9 @@ typedef struct UserInputEvent {
  - (void)handleTap:(GHOSTUITapGestureRecognizer *)sender;
  - (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender;
  - (void)handlePan2f:(GHOSTUIPanGestureRecognizer *)sender;
@@ -156,7 +156,7 @@ index 272c21b1cd1..8fda77f6e06 100644
  
  /* On screen keyboard handling */
  - (UITextField *)getUITextField;
-@@ -306,6 +383,12 @@ typedef struct UserInputEvent {
+@@ -305,6 +382,12 @@ typedef struct UserInputEvent {
    toolbar_enabled = true;
    toolbar = nil;
    last_tap_with_pencil = false;
@@ -169,7 +169,7 @@ index 272c21b1cd1..8fda77f6e06 100644
    external_keyboard_connected = [GCKeyboard coalescedKeyboard] != nil;
  
    /* Register for notifications of chnanges to the onscreen keyboard. */
-@@ -335,6 +418,22 @@ typedef struct UserInputEvent {
+@@ -334,6 +417,22 @@ typedef struct UserInputEvent {
                                                   name:GCKeyboardDidDisconnectNotification
                                                 object:nil];
    }
@@ -192,7 +192,7 @@ index 272c21b1cd1..8fda77f6e06 100644
  }
  
  - (void)registerGestureRecognizers
-@@ -392,6 +491,32 @@ typedef struct UserInputEvent {
+@@ -391,6 +490,32 @@ typedef struct UserInputEvent {
    pan_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypePencil), @(UITouchTypeDirect) ];
    [window->getView() addGestureRecognizer:pan_gesture_recognizer];
  
@@ -225,7 +225,7 @@ index 272c21b1cd1..8fda77f6e06 100644
    /* Pan gesture recognizer - two fingers 3D UI. */
    pan2f_gesture_recognizer = [[GHOSTUIPanGestureRecognizer alloc]
        initWithTarget:self
-@@ -411,6 +536,19 @@ typedef struct UserInputEvent {
+@@ -410,6 +535,19 @@ typedef struct UserInputEvent {
    zoom_gesture_recognizer.cancelsTouchesInView = false;
    [window->getView() addGestureRecognizer:zoom_gesture_recognizer];
  
@@ -245,8 +245,8 @@ index 272c21b1cd1..8fda77f6e06 100644
    /* Edge swipe. */
    edge_swipe_left = [[UIScreenEdgePanGestureRecognizer alloc]
        initWithTarget:self
-@@ -677,12 +815,73 @@ typedef struct UserInputEvent {
-       GHOST_GetMilliSeconds((GHOST_SystemHandle)system), GHOST_kEventFourFingerTap, window));
+@@ -669,12 +807,73 @@ typedef struct UserInputEvent {
+       std::make_unique<GHOST_Event>(system->getMilliSeconds(), GHOST_kEventFourFingerTap, window));
  }
  
 +- (void)handleScroll:(UIPanGestureRecognizer *)sender
@@ -321,7 +321,7 @@ index 272c21b1cd1..8fda77f6e06 100644
    UserInputEvent event_info(&touch_point, nullptr, nullptr, pencil_pan);
  
    if (sender.state == UIGestureRecognizerStateBegan ||
-@@ -690,6 +889,21 @@ typedef struct UserInputEvent {
+@@ -682,6 +881,21 @@ typedef struct UserInputEvent {
    {
      /* Register initial click for click and drag support. */
      if (sender.state == UIGestureRecognizerStateBegan) {
@@ -343,7 +343,7 @@ index 272c21b1cd1..8fda77f6e06 100644
        /* Set inital translation */
        [sender setCachedTranslation:translation];
        event_info.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
-@@ -722,6 +936,104 @@ typedef struct UserInputEvent {
+@@ -714,6 +928,104 @@ typedef struct UserInputEvent {
    [self generateUserInputEvents:event_info];
  }
  
@@ -448,7 +448,7 @@ index 272c21b1cd1..8fda77f6e06 100644
  - (void)handlePan2f:(GHOSTUIPanGestureRecognizer *)sender
  {
    /* Translation can be non-zero on begin event */
-@@ -783,14 +1095,43 @@ typedef struct UserInputEvent {
+@@ -775,14 +1087,43 @@ typedef struct UserInputEvent {
  
  - (void)handleHover:(GHOSTUIHoverGestureRecognizer *)sender
  {
@@ -496,7 +496,7 @@ index 272c21b1cd1..8fda77f6e06 100644
      UserInputEvent event_info(&hover_point, nullptr, nullptr, true);
      event_info.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
      [self generateUserInputEvents:event_info];
-@@ -1198,11 +1539,316 @@ typedef struct UserInputEvent {
+@@ -1186,11 +1527,316 @@ typedef struct UserInputEvent {
    }
  }
  
@@ -813,7 +813,7 @@ index 272c21b1cd1..8fda77f6e06 100644
  }
  
  /* IOS_FIXME - Not currently used, could be removed. */
-@@ -1480,6 +2126,18 @@ GHOST_WindowIOS::~GHOST_WindowIOS()
+@@ -1468,6 +2114,18 @@ GHOST_WindowIOS::~GHOST_WindowIOS()
      parent_window_->requestToActivateWindow();
      parent_window_ = nil;
    }
@@ -832,7 +832,7 @@ index 272c21b1cd1..8fda77f6e06 100644
    /* We have no choice but to resign, however this seems like it might cause issues. */
    if (system_ios_->current_active_window_ == this) {
      IOS_WINDOW_LOG(@"~GHOST_WindowIOS(): Warning, deactivating the active window %p?", this);
-@@ -1499,6 +2157,9 @@ GHOST_WindowIOS::~GHOST_WindowIOS()
+@@ -1487,6 +2145,9 @@ GHOST_WindowIOS::~GHOST_WindowIOS()
  
    /* Release window. */
    if (rootWindow) {
@@ -843,7 +843,7 @@ index 272c21b1cd1..8fda77f6e06 100644
      rootWindow = nil;
    }
 diff --git a/release/ios/Blender.app/Info.plist b/release/ios/Blender.app/Info.plist
-index e478b5b7a1a..521a2c40587 100644
+index e478b5b..521a2c4 100644
 --- a/release/ios/Blender.app/Info.plist
 +++ b/release/ios/Blender.app/Info.plist
 @@ -21,7 +21,7 @@
@@ -883,10 +883,10 @@ index e478b5b7a1a..521a2c40587 100644
  			<string>Blender File</string>
  			<key>UTTypeIcons</key>
 diff --git a/source/blender/editors/interface/view2d/view2d_ops.cc b/source/blender/editors/interface/view2d/view2d_ops.cc
-index 685b1234918..21934bf1e37 100644
+index fcdb16f..53ab27a 100644
 --- a/source/blender/editors/interface/view2d/view2d_ops.cc
 +++ b/source/blender/editors/interface/view2d/view2d_ops.cc
-@@ -232,12 +232,13 @@ static wmOperatorStatus view_pan_exec(bContext *C, wmOperator *op)
+@@ -234,12 +234,13 @@ static wmOperatorStatus view_pan_exec(bContext *C, wmOperator *op)
  static wmOperatorStatus view_pan_invoke(bContext *C, wmOperator *op, const wmEvent *event)
  {
  #ifdef WITH_APPLE_CROSSPLATFORM
@@ -907,10 +907,10 @@ index 685b1234918..21934bf1e37 100644
    }
  #endif
 diff --git a/source/blender/editors/space_view3d/view3d_navigate_view_move.cc b/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
-index bbb12e2e723..1e5cbc1c9c9 100644
+index 0a41edf..d80985f 100644
 --- a/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
 +++ b/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
-@@ -106,8 +106,12 @@ static wmOperatorStatus viewmove_invoke_impl(bContext *C,
+@@ -108,8 +108,12 @@ static wmOperatorStatus viewmove_invoke_impl(bContext *C,
  static wmOperatorStatus viewmove_invoke(bContext *C, wmOperator *op, const wmEvent *event)
  {
  #ifdef WITH_APPLE_CROSSPLATFORM
@@ -1123,10 +1123,10 @@ index df0c9fd..d21cd3a 100644
  #endif
  
 diff --git a/scripts/addons_core/bl_pkg/bl_extension_utils.py b/scripts/addons_core/bl_pkg/bl_extension_utils.py
-index 56d26b7..8e1dc0a 100644
+index d53fbb6..0c9feb6 100644
 --- a/scripts/addons_core/bl_pkg/bl_extension_utils.py
 +++ b/scripts/addons_core/bl_pkg/bl_extension_utils.py
-@@ -220,12 +220,69 @@ def blender_ext_cmd(python_args: Sequence[str]) -> Sequence[str]:
+@@ -233,12 +233,69 @@ def blender_ext_cmd(python_args: Sequence[str]) -> Sequence[str]:
  # Call JSON.
  #
  
@@ -1195,8 +1195,8 @@ index 56d26b7..8e1dc0a 100644
 +
      cmd = [*blender_ext_cmd(python_args), *args, "--output-type=JSON_0"]
      # Note that the context-manager isn't used to wait until the process is finished as
-     # the function only finishes when `poll()` is not none, it's just use to ensure file-handles
-@@ -236,7 +293,13 @@ def command_output_from_json_0(
+     # the function only finishes when `poll()` is not none, it's just used to ensure file-handles
+@@ -249,7 +306,13 @@ def command_output_from_json_0(
      if sys.platform == "win32":
          creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
  
@@ -1212,10 +1212,10 @@ index 56d26b7..8e1dc0a 100644
          assert stdout is not None
  
 diff --git a/scripts/addons_core/bl_pkg/cli/blender_ext.py b/scripts/addons_core/bl_pkg/cli/blender_ext.py
-index 43e3588..ca05d58 100644
+index 78a26d9..3a02ed5 100644
 --- a/scripts/addons_core/bl_pkg/cli/blender_ext.py
 +++ b/scripts/addons_core/bl_pkg/cli/blender_ext.py
-@@ -5626,6 +5626,9 @@ def msg_print_json_0(ty: str, data: PrimTypeOrSeq) -> bool:
+@@ -5621,6 +5621,9 @@ def msg_print_json_0(ty: str, data: PrimTypeOrSeq) -> bool:
  
  
  def msglog_from_args(args: argparse.Namespace) -> MessageLogger:
@@ -1225,7 +1225,7 @@ index 43e3588..ca05d58 100644
      # Will be None when running form Blender.
      output_type = getattr(args, "output_type", 'TEXT')
  
-@@ -5648,31 +5651,36 @@ def main(
+@@ -5643,28 +5646,33 @@ def main(
          args_internal: bool = True,
          args_extra_subcommands_fn: ArgsSubparseFn | None = None,
          prog: str | None = None,
@@ -1275,14 +1275,9 @@ index 43e3588..ca05d58 100644
 +            sys.stdout.write("{:s}\n".format(VERSION))
 +            return 0
  
--    if (sys.platform == "win32") and (sys.version_info < (3, 12, 6)):
--        _worlaround_win32_ssl_cert_failure()
-+        if (sys.platform == "win32") and (sys.version_info < (3, 12, 6)):
-+            _worlaround_win32_ssl_cert_failure()
- 
      parser = argparse_create(
          args_internal=args_internal,
-@@ -5680,6 +5688,8 @@ def main(
+@@ -5672,6 +5680,8 @@ def main(
          prog=prog,
      )
      args = parser.parse_args(argv)

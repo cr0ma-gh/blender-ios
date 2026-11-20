@@ -8,7 +8,7 @@ modified and lists all changes.
 
 - **Upstream:** Blender, official repository `https://projects.blender.org/blender/blender.git`
 - **Branch:** `ios` (experimental)
-- **Pinned commit:** `d9b6fe34ddce527d93b97c0bf42ad92cebac4e4e`
+- **Pinned commit:** `a1de44dd54af75a4c8c4a29a5fed2a1334a87446` (Blender 5.1.2 Release)
   ("iOS: Correct Info.plist CFBundleVersion version string", 2025-09-10)
 
 All modifications below are provided as [patches/blender-ipad.patch](patches/blender-ipad.patch),
