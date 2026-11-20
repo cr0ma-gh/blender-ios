@@ -8,11 +8,26 @@ modified and lists all changes.
 
 - **Upstream:** Blender, official repository `https://projects.blender.org/blender/blender.git`
 - **Branch:** `ios` (experimental)
-- **Pinned commit:** `a1de44dd54af75a4c8c4a29a5fed2a1334a87446` (Blender 5.1.2 Release)
+- **Pinned commit:** `d9b6fe34ddce527d93b97c0bf42ad92cebac4e4e` (Blender 5.0)
   ("iOS: Correct Info.plist CFBundleVersion version string", 2025-09-10)
 
 All modifications below are provided as [patches/blender-ipad.patch](patches/blender-ipad.patch),
 which applies cleanly on top of that commit.
+
+Two builds are produced from that base:
+
+- **tablet** — additionally applies [patches/tablet-ui.patch](patches/tablet-ui.patch) first: the
+  upstream Blender commits from branch `ios-workshop`, unmodified except for one trivial
+  versioning merge, cherry-picked onto the pinned commit:
+  - `c6e8abfe` — *UI: Menu Behavior Preferences #144838* (Dalai Felinto)
+  - `97232b0f` — *WIP: Experimental editor dock #144945* (Dalai Felinto)
+  - (`922720b9` *Touch-Capable Area Maintenance #144591* is already part of the pinned `ios`
+    commit via main, so it is not re-applied.)
+- **legacy** — the pinned commit with `blender-ipad.patch` only.
+
+The newer `ios` tip `a1de44dd` (Blender 5.1.2) is not used yet: no 5.1 precompiled
+`lib-ios_arm64` exists, so it needs the iOS dependencies built from source (`make deps`).
+The work-in-progress patch rebased onto it is kept in [patches/wip-5.1/](patches/wip-5.1/).
 
 ## Modified files & what changed
 
@@ -37,8 +52,8 @@ which applies cleanly on top of that commit.
   press start the native grab-pan modal (depth/zoom correct).
 - `source/blender/editors/interface/view2d/view2d_ops.cc` — enable middle-click-drag pan in UV /
   2D editors.
-- `CMakeLists.txt` — guard Python >= 3.13 check to allow Python 3.11 for iOS cross-compilation (`WITH_APPLE_CROSSPLATFORM`).
-- `build_files/cmake/platform/platform_apple.cmake` — Apple/iOS build configuration (Python 3.11 target library detection, host Python executable fallback, warn instead of fatal error for missing macOS precompiled libs).
+- `build_files/cmake/platform/platform_apple.cmake` — warn instead of a fatal error when the
+  macOS precompiled libs are missing.
 
 ### Branding (this distribution)
 - `release/ios/Blender.app/Info.plist`

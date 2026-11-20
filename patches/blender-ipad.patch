@@ -1,21 +1,8 @@
-diff --git a/CMakeLists.txt b/CMakeLists.txt
-index ff3b4c7..2e99471 100644
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -1504,7 +1504,7 @@ if(WITH_PYTHON)
-   # because UNIX will search for the old Python paths which may not exist.
-   # giving errors about missing paths before this case is met.
-   if(DEFINED PYTHON_VERSION)
--    if("${PYTHON_VERSION}" VERSION_LESS "3.13")
-+    if(NOT WITH_APPLE_CROSSPLATFORM AND "${PYTHON_VERSION}" VERSION_LESS "3.13")
-       message(
-         FATAL_ERROR
-         "At least Python 3.13 is required to build, but found Python ${PYTHON_VERSION}"
 diff --git a/build_files/cmake/platform/platform_apple.cmake b/build_files/cmake/platform/platform_apple.cmake
-index 79b1287..eef900d 100644
+index ece1c7cf426..ec666786c4b 100644
 --- a/build_files/cmake/platform/platform_apple.cmake
 +++ b/build_files/cmake/platform/platform_apple.cmake
-@@ -181,7 +181,7 @@ if(WITH_APPLE_CROSSPLATFORM)
+@@ -178,7 +178,7 @@ if(WITH_APPLE_CROSSPLATFORM)
    endif()
  else()
    if(NOT EXISTS "${LIBDIR}/python/")
@@ -24,107 +11,12 @@ index 79b1287..eef900d 100644
    endif()
  endif()
  if(FIRST_RUN)
-@@ -207,31 +207,26 @@ if(NOT WITH_APPLE_CROSSPLATFORM)
-   endif()
- 
- else()
--  # When building for iOS we use the MacOS version of Python from the macos libs dir
-+  # When building for iOS we use the precompiled libraries in lib/ios_arm64 (Python 3.11).
-   set(CROSSCOMPILE_HOST_LIBDIR "${CMAKE_SOURCE_DIR}/lib/macos_arm64")
--  if(NOT PYTHON_VERSION)
--    set(PYTHON_VERSION 3.13)
--    # IOS_FIXME: This is not great why is PYTHON_VERSION not defined here?
--    message("WARNING Manually defining Python Version to 3.13 for iOS build")
-+  set(PYTHON_VERSION 3.11 CACHE STRING "Python Version (major and minor only)" FORCE)
-+  if(EXISTS "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python${PYTHON_VERSION}")
-+    set(PYTHON_EXECUTABLE "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python${PYTHON_VERSION}")
-+  elseif(EXISTS "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python3.13")
-     set(PYTHON_EXECUTABLE "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python3.13")
-   else()
--    set(PYTHON_EXECUTABLE "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python${PYTHON_VERSION}")
-+    find_program(PYTHON_EXECUTABLE "python3")
-   endif()
- 
-+  set(PYTHON_ROOT_DIR "${LIBDIR}/python")
-   set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python${PYTHON_VERSION}")
-+  set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python${PYTHON_VERSION}")
-   set(PYTHON_LIBPATH "${LIBDIR}/python/lib")
-+  set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython${PYTHON_VERSION}.a")
-+  set(PYTHON_LIBRARIES "${LIBDIR}/python/lib/libpython${PYTHON_VERSION}.a")
- 
--  set(PYTHON_LIBRARIES
--    "${LIBDIR}/python/lib/libpython${PYTHON_VERSION}.a"
--  )
--
--  if(NOT EXISTS ${PYTHON_EXECUTABLE})
--    message(
--      FATAL_ERROR
--      "Missing: <${PYTHON_EXECUTABLE}>\n"
--      "MacOS version of Python must exist to build iOS version\n"
--	  "Try building MacOS version first: 'make update' or 'make deps'\n"
--    )
-+  if(NOT EXISTS "${PYTHON_EXECUTABLE}")
-+    find_program(PYTHON_EXECUTABLE "python3")
-   endif()
- 
-   message(STATUS "HOST PYTHON EXECUTABLE: ${PYTHON_EXECUTABLE}")
-diff --git a/intern/ghost/intern/GHOST_SystemIOS.mm b/intern/ghost/intern/GHOST_SystemIOS.mm
-index 1937de8..05a0006 100644
---- a/intern/ghost/intern/GHOST_SystemIOS.mm
-+++ b/intern/ghost/intern/GHOST_SystemIOS.mm
-@@ -55,6 +55,18 @@ int main_ios_callback(int argc, const char **argv);
- - (BOOL)application:(UIApplication *)application
-     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
- {
-+  @autoreleasepool {
-+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-+    if ([paths count] > 0) {
-+      NSString *docs = [paths objectAtIndex:0];
-+      NSString *addonsPath = [docs stringByAppendingPathComponent:@"scripts/addons"];
-+      [[NSFileManager defaultManager] createDirectoryAtPath:addonsPath
-+                                withIntermediateDirectories:YES
-+                                                 attributes:nil
-+                                                      error:nil];
-+    }
-+  }
-+
-   main_ios_callback(argc, argv);
- 
-   return YES;
-@@ -66,7 +78,12 @@ int main_ios_callback(int argc, const char **argv);
- {
-   GHOST_SystemIOS *system = static_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
- 
--  system->handleOpenDocumentRequest(url.path);
-+  if (url) {
-+    [url startAccessingSecurityScopedResource];
-+    if (system) {
-+      system->handleOpenDocumentRequest(url.path);
-+    }
-+  }
- 
-   return YES;
- }
-@@ -903,7 +920,12 @@ bool GHOST_SystemIOS::handleOpenDocumentRequest(void *filepathStr)
- 
-   @autoreleasepool {
-     if (!current_active_window_) {
--      return NO;
-+      if (window_manager_ && window_manager_->getActiveWindow()) {
-+        current_active_window_ = (GHOST_WindowIOS *)window_manager_->getActiveWindow();
-+      }
-+      else {
-+        return NO;
-+      }
-     }
- 
-     /* Discard event if we are in cursor grab sequence,
 diff --git a/intern/ghost/intern/GHOST_WindowIOS.mm b/intern/ghost/intern/GHOST_WindowIOS.mm
-index 56d2ffa..afca91d 100644
+index 272c21b1cd1..8fda77f6e06 100644
 --- a/intern/ghost/intern/GHOST_WindowIOS.mm
 +++ b/intern/ghost/intern/GHOST_WindowIOS.mm
-@@ -9,9 +9,11 @@
- 
+@@ -10,9 +10,11 @@
+ #include "GHOST_C-api.h"
  #include "GHOST_Debug.hh"
  #include "GHOST_EventButton.hh"
 +#include "GHOST_WindowManager.hh"
@@ -135,7 +27,7 @@ index 56d2ffa..afca91d 100644
  #include "GHOST_EventTouch.hh"
  #include "GHOST_EventTrackpad.hh"
  
-@@ -23,6 +25,8 @@
+@@ -24,6 +26,8 @@
  
  #include <unordered_map>
  
@@ -144,7 +36,7 @@ index 56d2ffa..afca91d 100644
  // #define IOS_INPUT_LOGGING
  #if defined(IOS_INPUT_LOGGING)
  #  define IOS_INPUT_LOG(...) NSLog(__VA_ARGS__)
-@@ -30,6 +34,13 @@
+@@ -31,6 +35,13 @@
  #  define IOS_INPUT_LOG(...)
  #endif
  
@@ -158,7 +50,7 @@ index 56d2ffa..afca91d 100644
  // #define IOS_WINDOW_LOGGING
  #if defined(IOS_WINDOW_LOGGING)
  #  define IOS_WINDOW_LOG(...) NSLog(__VA_ARGS__)
-@@ -121,16 +132,51 @@ typedef struct UserInputEvent {
+@@ -122,16 +133,51 @@ typedef struct UserInputEvent {
  @interface GHOSTUIPanGestureRecognizer : UIPanGestureRecognizer
  {
    CGPoint cached_translation;
@@ -210,7 +102,7 @@ index 56d2ffa..afca91d 100644
  - (CGPoint)getScaledTouchPoint:(GHOST_WindowIOS *)window
  {
    CGPoint touch_point = [self locationInView:window->getView()];
-@@ -239,7 +285,12 @@ typedef struct UserInputEvent {
+@@ -240,7 +286,12 @@ typedef struct UserInputEvent {
    GHOSTUITapGestureRecognizer *tap4f_gesture_recognizer;
    GHOSTUIPanGestureRecognizer *pan_gesture_recognizer;
    GHOSTUIPanGestureRecognizer *pan2f_gesture_recognizer;
@@ -223,7 +115,7 @@ index 56d2ffa..afca91d 100644
    GHOSTUIHoverGestureRecognizer *hover_gesture_recognizer;
    UIPencilInteraction *pencil_interaction;
    UIScreenEdgePanGestureRecognizer *edge_swipe_left;
-@@ -258,6 +309,30 @@ typedef struct UserInputEvent {
+@@ -259,6 +310,30 @@ typedef struct UserInputEvent {
    const char *text_field_string;
    GHOST_KeyboardProperties current_keyboard_properties;
    bool external_keyboard_connected;
@@ -254,7 +146,7 @@ index 56d2ffa..afca91d 100644
  
    /* Toolbar */
    bool toolbar_enabled;
-@@ -281,7 +356,9 @@ typedef struct UserInputEvent {
+@@ -282,7 +357,9 @@ typedef struct UserInputEvent {
  - (void)handleTap:(GHOSTUITapGestureRecognizer *)sender;
  - (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender;
  - (void)handlePan2f:(GHOSTUIPanGestureRecognizer *)sender;
@@ -264,7 +156,7 @@ index 56d2ffa..afca91d 100644
  
  /* On screen keyboard handling */
  - (UITextField *)getUITextField;
-@@ -305,6 +382,12 @@ typedef struct UserInputEvent {
+@@ -306,6 +383,12 @@ typedef struct UserInputEvent {
    toolbar_enabled = true;
    toolbar = nil;
    last_tap_with_pencil = false;
@@ -277,7 +169,7 @@ index 56d2ffa..afca91d 100644
    external_keyboard_connected = [GCKeyboard coalescedKeyboard] != nil;
  
    /* Register for notifications of chnanges to the onscreen keyboard. */
-@@ -334,6 +417,22 @@ typedef struct UserInputEvent {
+@@ -335,6 +418,22 @@ typedef struct UserInputEvent {
                                                   name:GCKeyboardDidDisconnectNotification
                                                 object:nil];
    }
@@ -300,7 +192,7 @@ index 56d2ffa..afca91d 100644
  }
  
  - (void)registerGestureRecognizers
-@@ -391,6 +490,32 @@ typedef struct UserInputEvent {
+@@ -392,6 +491,32 @@ typedef struct UserInputEvent {
    pan_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypePencil), @(UITouchTypeDirect) ];
    [window->getView() addGestureRecognizer:pan_gesture_recognizer];
  
@@ -333,7 +225,7 @@ index 56d2ffa..afca91d 100644
    /* Pan gesture recognizer - two fingers 3D UI. */
    pan2f_gesture_recognizer = [[GHOSTUIPanGestureRecognizer alloc]
        initWithTarget:self
-@@ -410,6 +535,19 @@ typedef struct UserInputEvent {
+@@ -411,6 +536,19 @@ typedef struct UserInputEvent {
    zoom_gesture_recognizer.cancelsTouchesInView = false;
    [window->getView() addGestureRecognizer:zoom_gesture_recognizer];
  
@@ -353,8 +245,8 @@ index 56d2ffa..afca91d 100644
    /* Edge swipe. */
    edge_swipe_left = [[UIScreenEdgePanGestureRecognizer alloc]
        initWithTarget:self
-@@ -669,12 +807,73 @@ typedef struct UserInputEvent {
-       std::make_unique<GHOST_Event>(system->getMilliSeconds(), GHOST_kEventFourFingerTap, window));
+@@ -677,12 +815,73 @@ typedef struct UserInputEvent {
+       GHOST_GetMilliSeconds((GHOST_SystemHandle)system), GHOST_kEventFourFingerTap, window));
  }
  
 +- (void)handleScroll:(UIPanGestureRecognizer *)sender
@@ -429,7 +321,7 @@ index 56d2ffa..afca91d 100644
    UserInputEvent event_info(&touch_point, nullptr, nullptr, pencil_pan);
  
    if (sender.state == UIGestureRecognizerStateBegan ||
-@@ -682,6 +881,21 @@ typedef struct UserInputEvent {
+@@ -690,6 +889,21 @@ typedef struct UserInputEvent {
    {
      /* Register initial click for click and drag support. */
      if (sender.state == UIGestureRecognizerStateBegan) {
@@ -451,7 +343,7 @@ index 56d2ffa..afca91d 100644
        /* Set inital translation */
        [sender setCachedTranslation:translation];
        event_info.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
-@@ -714,6 +928,104 @@ typedef struct UserInputEvent {
+@@ -722,6 +936,104 @@ typedef struct UserInputEvent {
    [self generateUserInputEvents:event_info];
  }
  
@@ -556,7 +448,7 @@ index 56d2ffa..afca91d 100644
  - (void)handlePan2f:(GHOSTUIPanGestureRecognizer *)sender
  {
    /* Translation can be non-zero on begin event */
-@@ -775,14 +1087,43 @@ typedef struct UserInputEvent {
+@@ -783,14 +1095,43 @@ typedef struct UserInputEvent {
  
  - (void)handleHover:(GHOSTUIHoverGestureRecognizer *)sender
  {
@@ -604,7 +496,7 @@ index 56d2ffa..afca91d 100644
      UserInputEvent event_info(&hover_point, nullptr, nullptr, true);
      event_info.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
      [self generateUserInputEvents:event_info];
-@@ -1186,11 +1527,316 @@ typedef struct UserInputEvent {
+@@ -1198,11 +1539,316 @@ typedef struct UserInputEvent {
    }
  }
  
@@ -921,7 +813,7 @@ index 56d2ffa..afca91d 100644
  }
  
  /* IOS_FIXME - Not currently used, could be removed. */
-@@ -1468,6 +2114,18 @@ GHOST_WindowIOS::~GHOST_WindowIOS()
+@@ -1480,6 +2126,18 @@ GHOST_WindowIOS::~GHOST_WindowIOS()
      parent_window_->requestToActivateWindow();
      parent_window_ = nil;
    }
@@ -940,7 +832,7 @@ index 56d2ffa..afca91d 100644
    /* We have no choice but to resign, however this seems like it might cause issues. */
    if (system_ios_->current_active_window_ == this) {
      IOS_WINDOW_LOG(@"~GHOST_WindowIOS(): Warning, deactivating the active window %p?", this);
-@@ -1487,6 +2145,9 @@ GHOST_WindowIOS::~GHOST_WindowIOS()
+@@ -1499,6 +2157,9 @@ GHOST_WindowIOS::~GHOST_WindowIOS()
  
    /* Release window. */
    if (rootWindow) {
@@ -951,7 +843,7 @@ index 56d2ffa..afca91d 100644
      rootWindow = nil;
    }
 diff --git a/release/ios/Blender.app/Info.plist b/release/ios/Blender.app/Info.plist
-index e478b5b..521a2c4 100644
+index e478b5b7a1a..521a2c40587 100644
 --- a/release/ios/Blender.app/Info.plist
 +++ b/release/ios/Blender.app/Info.plist
 @@ -21,7 +21,7 @@
@@ -990,170 +882,100 @@ index e478b5b..521a2c4 100644
  			<key>UTTypeDescription</key>
  			<string>Blender File</string>
  			<key>UTTypeIcons</key>
-diff --git a/scripts/addons_core/bl_pkg/bl_extension_utils.py b/scripts/addons_core/bl_pkg/bl_extension_utils.py
-index d53fbb6..0c9feb6 100644
---- a/scripts/addons_core/bl_pkg/bl_extension_utils.py
-+++ b/scripts/addons_core/bl_pkg/bl_extension_utils.py
-@@ -233,12 +233,69 @@ def blender_ext_cmd(python_args: Sequence[str]) -> Sequence[str]:
- # Call JSON.
- #
+diff --git a/source/blender/editors/interface/view2d/view2d_ops.cc b/source/blender/editors/interface/view2d/view2d_ops.cc
+index 685b1234918..21934bf1e37 100644
+--- a/source/blender/editors/interface/view2d/view2d_ops.cc
++++ b/source/blender/editors/interface/view2d/view2d_ops.cc
+@@ -232,12 +232,13 @@ static wmOperatorStatus view_pan_exec(bContext *C, wmOperator *op)
+ static wmOperatorStatus view_pan_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+ {
+ #ifdef WITH_APPLE_CROSSPLATFORM
+-  ScrArea *area = CTX_wm_area(C);
+-  ARegion *region = CTX_wm_region(C);
+-  /* Only scroll the File/Asset Browser and Asset Shelf views with multiple finger on iOS. */
+-  if ((area->spacetype == SPACE_FILE || region->regiontype == RGN_TYPE_ASSET_SHELF) &&
+-      !(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS))
+-  {
++  /* On iOS only a two-finger trackpad pan (MOUSEPAN, numFingers==2) may pan/scroll
++   * a 2D view. A plain MIDDLEMOUSE press must NOT start a modal pan: it cannot be
++   * driven without continuous cursor-move events on iPad, and starting it would
++   * block the trackpad pan. This lets external-mouse middle-drag (delivered as a
++   * 2-finger TRACKPADPAN) pan the UV/Image and other 2D editors, matching the 3D
++   * viewport's behaviour. */
++  if (!(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
+     return OPERATOR_FINISHED;
+   }
+ #endif
+diff --git a/source/blender/editors/space_view3d/view3d_navigate_view_move.cc b/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
+index bbb12e2e723..1e5cbc1c9c9 100644
+--- a/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
++++ b/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
+@@ -106,8 +106,12 @@ static wmOperatorStatus viewmove_invoke_impl(bContext *C,
+ static wmOperatorStatus viewmove_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+ {
+ #ifdef WITH_APPLE_CROSSPLATFORM
+-  /* Only handle inverted events for 3D view interaction on iOS */
+-  if (!(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
++  /* iOS: a real MIDDLEMOUSE press (external mouse) starts the modal grab-pan,
++   * driven by CURSOR_MOVE events — this pins the grabbed point exactly (depth and
++   * zoom correct), unlike the zoom-amplified one-shot TRACKPADPAN path. Two-finger
++   * trackpad pans (MOUSEPAN) still use the one-shot path; other non-two-finger
++   * events (e.g. touch) are ignored. */
++  if (event->type != MIDDLEMOUSE && !(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
+     return OPERATOR_FINISHED;
+   }
+ #endif
+diff --git a/intern/ghost/intern/GHOST_SystemIOS.mm b/intern/ghost/intern/GHOST_SystemIOS.mm
+index 1937de8..05a0006 100644
+--- a/intern/ghost/intern/GHOST_SystemIOS.mm
++++ b/intern/ghost/intern/GHOST_SystemIOS.mm
+@@ -55,6 +55,18 @@ int main_ios_callback(int argc, const char **argv);
+ - (BOOL)application:(UIApplication *)application
+     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
+ {
++  @autoreleasepool {
++    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
++    if ([paths count] > 0) {
++      NSString *docs = [paths objectAtIndex:0];
++      NSString *addonsPath = [docs stringByAppendingPathComponent:@"scripts/addons"];
++      [[NSFileManager defaultManager] createDirectoryAtPath:addonsPath
++                                withIntermediateDirectories:YES
++                                                 attributes:nil
++                                                      error:nil];
++    }
++  }
++
+   main_ios_callback(argc, argv);
  
-+def _command_output_in_process(
-+        args: Sequence[str],
-+        use_idle: bool,
-+) -> Generator[InfoItemSeq, bool, None]:
-+    import queue
-+    import threading
-+    from .cli import blender_ext
-+
-+    msg_queue: queue.Queue = queue.Queue()
-+    done_event = threading.Event()
-+    blender_ext.REQUEST_EXIT = False
-+
-+    def msg_callback(ty: str, data: Any) -> bool:
-+        msg_queue.put((ty, data))
-+        return blender_ext.REQUEST_EXIT
-+
-+    def thread_main():
-+        try:
-+            blender_ext.main(
-+                list(args),
-+                args_internal=True,
-+                msg_fn=msg_callback,
-+            )
-+        except Exception as ex:
-+            import traceback
-+            traceback.print_exc()
-+            msg_queue.put(("ERROR", str(ex)))
-+        finally:
-+            done_event.set()
-+
-+    t = threading.Thread(target=thread_main, daemon=True)
-+    t.start()
-+
-+    while True:
-+        json_messages = []
-+        while not msg_queue.empty():
-+            try:
-+                json_messages.append(msg_queue.get_nowait())
-+            except queue.Empty:
-+                break
-+
-+        if not json_messages and done_event.is_set() and msg_queue.empty():
-+            break
-+
-+        if not json_messages and use_idle:
-+            time.sleep(IDLE_WAIT_ON_READ)
-+
-+        request_exit = yield json_messages
-+        if request_exit:
-+            blender_ext.REQUEST_EXIT = True
-+
-+
- def command_output_from_json_0(
-         args: Sequence[str],
-         use_idle: bool,
-         *,
-         python_args: Sequence[str],
- ) -> Generator[InfoItemSeq, bool, None]:
-+    # On iOS (and platforms where subprocesses cannot be spawned), run in-process using threads.
-+    if sys.platform == "ios" or not hasattr(os, "fork"):
-+        yield from _command_output_in_process(args, use_idle)
-+        return
-+
-     cmd = [*blender_ext_cmd(python_args), *args, "--output-type=JSON_0"]
-     # Note that the context-manager isn't used to wait until the process is finished as
-     # the function only finishes when `poll()` is not none, it's just used to ensure file-handles
-@@ -249,7 +306,13 @@ def command_output_from_json_0(
-     if sys.platform == "win32":
-         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+   return YES;
+@@ -66,7 +78,12 @@ int main_ios_callback(int argc, const char **argv);
+ {
+   GHOST_SystemIOS *system = static_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
  
--    with subprocess.Popen(cmd, stdout=subprocess.PIPE, creationflags=creationflags) as ps:
-+    try:
-+        ps = subprocess.Popen(cmd, stdout=subprocess.PIPE, creationflags=creationflags)
-+    except (PermissionError, OSError):
-+        yield from _command_output_in_process(args, use_idle)
-+        return
-+
-+    with ps:
-         stdout = ps.stdout
-         assert stdout is not None
+-  system->handleOpenDocumentRequest(url.path);
++  if (url) {
++    [url startAccessingSecurityScopedResource];
++    if (system) {
++      system->handleOpenDocumentRequest(url.path);
++    }
++  }
  
-diff --git a/scripts/addons_core/bl_pkg/cli/blender_ext.py b/scripts/addons_core/bl_pkg/cli/blender_ext.py
-index 78a26d9..3a02ed5 100644
---- a/scripts/addons_core/bl_pkg/cli/blender_ext.py
-+++ b/scripts/addons_core/bl_pkg/cli/blender_ext.py
-@@ -5621,6 +5621,9 @@ def msg_print_json_0(ty: str, data: PrimTypeOrSeq) -> bool:
+   return YES;
+ }
+@@ -903,7 +920,12 @@ bool GHOST_SystemIOS::handleOpenDocumentRequest(void *filepathStr)
  
+   @autoreleasepool {
+     if (!current_active_window_) {
+-      return NO;
++      if (window_manager_ && window_manager_->getActiveWindow()) {
++        current_active_window_ = (GHOST_WindowIOS *)window_manager_->getActiveWindow();
++      }
++      else {
++        return NO;
++      }
+     }
  
- def msglog_from_args(args: argparse.Namespace) -> MessageLogger:
-+    if getattr(args, "msg_fn", None) is not None:
-+        return MessageLogger(args.msg_fn)
-+
-     # Will be None when running form Blender.
-     output_type = getattr(args, "output_type", 'TEXT')
- 
-@@ -5643,28 +5646,33 @@ def main(
-         args_internal: bool = True,
-         args_extra_subcommands_fn: ArgsSubparseFn | None = None,
-         prog: str | None = None,
-+        msg_fn: MessageFn | None = None,
- ) -> int:
-     # NOTE: only manipulate Python's run-time such as encoding & SIGINT when running stand-alone.
- 
--    # Run early to prevent a `KeyboardInterrupt` exception.
--    signal.signal(signal.SIGINT, signal_handler_sigint)
--    if sys.platform == "win32":
--        # WIN32 needs to check for break as sending SIGINT isn't supported from the caller, see #131947.
--        signal.signal(signal.SIGBREAK, signal_handler_sigint)
--
--    # Needed on WIN32 which doesn't default to `utf-8`.
--    for fh in (sys.stdout, sys.stderr):
--        # While this is typically the case, is only guaranteed to be `TextIO` so check `reconfigure` is available.
--        if not isinstance(fh, io.TextIOWrapper):
--            continue
--        # pylint: disable-next=no-member; False positive.
--        if fh.encoding.lower().partition(":")[0] == "utf-8":
--            continue
--        fh.reconfigure(encoding="utf-8")
-+    if msg_fn is None:
-+        # Run early to prevent a `KeyboardInterrupt` exception.
-+        try:
-+            signal.signal(signal.SIGINT, signal_handler_sigint)
-+            if sys.platform == "win32":
-+                # WIN32 needs to check for break as sending SIGINT isn't supported from the caller, see #131947.
-+                signal.signal(signal.SIGBREAK, signal_handler_sigint)
-+        except (ValueError, AttributeError):
-+            pass
-+
-+        # Needed on WIN32 which doesn't default to `utf-8`.
-+        for fh in (sys.stdout, sys.stderr):
-+            # While this is typically the case, is only guaranteed to be `TextIO` so check `reconfigure` is available.
-+            if not isinstance(fh, io.TextIOWrapper):
-+                continue
-+            # pylint: disable-next=no-member; False positive.
-+            if fh.encoding.lower().partition(":")[0] == "utf-8":
-+                continue
-+            fh.reconfigure(encoding="utf-8")
- 
--    if "--version" in sys.argv:
--        sys.stdout.write("{:s}\n".format(VERSION))
--        return 0
-+        if "--version" in sys.argv:
-+            sys.stdout.write("{:s}\n".format(VERSION))
-+            return 0
- 
-     parser = argparse_create(
-         args_internal=args_internal,
-@@ -5672,6 +5680,8 @@ def main(
-         prog=prog,
-     )
-     args = parser.parse_args(argv)
-+    if msg_fn is not None:
-+        args.msg_fn = msg_fn
-     # Call sub-parser callback.
-     if not hasattr(args, "func"):
-         parser.print_help()
+     /* Discard event if we are in cursor grab sequence,
 diff --git a/source/blender/blenkernel/intern/appdir.cc b/source/blender/blenkernel/intern/appdir.cc
 index 57bfc96..2587166 100644
 --- a/source/blender/blenkernel/intern/appdir.cc
@@ -1271,30 +1093,6 @@ index fabca91..745bc2a 100644
  #else
      NSString *path = [[NSFileManager defaultManager] currentDirectoryPath];
  #endif
-diff --git a/source/blender/editors/interface/view2d/view2d_ops.cc b/source/blender/editors/interface/view2d/view2d_ops.cc
-index fcdb16f..53ab27a 100644
---- a/source/blender/editors/interface/view2d/view2d_ops.cc
-+++ b/source/blender/editors/interface/view2d/view2d_ops.cc
-@@ -234,12 +234,13 @@ static wmOperatorStatus view_pan_exec(bContext *C, wmOperator *op)
- static wmOperatorStatus view_pan_invoke(bContext *C, wmOperator *op, const wmEvent *event)
- {
- #ifdef WITH_APPLE_CROSSPLATFORM
--  ScrArea *area = CTX_wm_area(C);
--  ARegion *region = CTX_wm_region(C);
--  /* Only scroll the File/Asset Browser and Asset Shelf views with multiple finger on iOS. */
--  if ((area->spacetype == SPACE_FILE || region->regiontype == RGN_TYPE_ASSET_SHELF) &&
--      !(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS))
--  {
-+  /* On iOS only a two-finger trackpad pan (MOUSEPAN, numFingers==2) may pan/scroll
-+   * a 2D view. A plain MIDDLEMOUSE press must NOT start a modal pan: it cannot be
-+   * driven without continuous cursor-move events on iPad, and starting it would
-+   * block the trackpad pan. This lets external-mouse middle-drag (delivered as a
-+   * 2-finger TRACKPADPAN) pan the UV/Image and other 2D editors, matching the 3D
-+   * viewport's behaviour. */
-+  if (!(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
-     return OPERATOR_FINISHED;
-   }
- #endif
 diff --git a/source/blender/editors/space_file/fsmenu_system.mm b/source/blender/editors/space_file/fsmenu_system.mm
 index df0c9fd..d21cd3a 100644
 --- a/source/blender/editors/space_file/fsmenu_system.mm
@@ -1324,22 +1122,172 @@ index df0c9fd..d21cd3a 100644
    }
  #endif
  
-diff --git a/source/blender/editors/space_view3d/view3d_navigate_view_move.cc b/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
-index 0a41edf..d80985f 100644
---- a/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
-+++ b/source/blender/editors/space_view3d/view3d_navigate_view_move.cc
-@@ -108,8 +108,12 @@ static wmOperatorStatus viewmove_invoke_impl(bContext *C,
- static wmOperatorStatus viewmove_invoke(bContext *C, wmOperator *op, const wmEvent *event)
- {
- #ifdef WITH_APPLE_CROSSPLATFORM
--  /* Only handle inverted events for 3D view interaction on iOS */
--  if (!(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
-+  /* iOS: a real MIDDLEMOUSE press (external mouse) starts the modal grab-pan,
-+   * driven by CURSOR_MOVE events — this pins the grabbed point exactly (depth and
-+   * zoom correct), unlike the zoom-amplified one-shot TRACKPADPAN path. Two-finger
-+   * trackpad pans (MOUSEPAN) still use the one-shot path; other non-two-finger
-+   * events (e.g. touch) are ignored. */
-+  if (event->type != MIDDLEMOUSE && !(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
-     return OPERATOR_FINISHED;
-   }
- #endif
+diff --git a/scripts/addons_core/bl_pkg/bl_extension_utils.py b/scripts/addons_core/bl_pkg/bl_extension_utils.py
+index 56d26b7..8e1dc0a 100644
+--- a/scripts/addons_core/bl_pkg/bl_extension_utils.py
++++ b/scripts/addons_core/bl_pkg/bl_extension_utils.py
+@@ -220,12 +220,69 @@ def blender_ext_cmd(python_args: Sequence[str]) -> Sequence[str]:
+ # Call JSON.
+ #
+ 
++def _command_output_in_process(
++        args: Sequence[str],
++        use_idle: bool,
++) -> Generator[InfoItemSeq, bool, None]:
++    import queue
++    import threading
++    from .cli import blender_ext
++
++    msg_queue: queue.Queue = queue.Queue()
++    done_event = threading.Event()
++    blender_ext.REQUEST_EXIT = False
++
++    def msg_callback(ty: str, data: Any) -> bool:
++        msg_queue.put((ty, data))
++        return blender_ext.REQUEST_EXIT
++
++    def thread_main():
++        try:
++            blender_ext.main(
++                list(args),
++                args_internal=True,
++                msg_fn=msg_callback,
++            )
++        except Exception as ex:
++            import traceback
++            traceback.print_exc()
++            msg_queue.put(("ERROR", str(ex)))
++        finally:
++            done_event.set()
++
++    t = threading.Thread(target=thread_main, daemon=True)
++    t.start()
++
++    while True:
++        json_messages = []
++        while not msg_queue.empty():
++            try:
++                json_messages.append(msg_queue.get_nowait())
++            except queue.Empty:
++                break
++
++        if not json_messages and done_event.is_set() and msg_queue.empty():
++            break
++
++        if not json_messages and use_idle:
++            time.sleep(IDLE_WAIT_ON_READ)
++
++        request_exit = yield json_messages
++        if request_exit:
++            blender_ext.REQUEST_EXIT = True
++
++
+ def command_output_from_json_0(
+         args: Sequence[str],
+         use_idle: bool,
+         *,
+         python_args: Sequence[str],
+ ) -> Generator[InfoItemSeq, bool, None]:
++    # On iOS (and platforms where subprocesses cannot be spawned), run in-process using threads.
++    if sys.platform == "ios" or not hasattr(os, "fork"):
++        yield from _command_output_in_process(args, use_idle)
++        return
++
+     cmd = [*blender_ext_cmd(python_args), *args, "--output-type=JSON_0"]
+     # Note that the context-manager isn't used to wait until the process is finished as
+     # the function only finishes when `poll()` is not none, it's just use to ensure file-handles
+@@ -236,7 +293,13 @@ def command_output_from_json_0(
+     if sys.platform == "win32":
+         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+ 
+-    with subprocess.Popen(cmd, stdout=subprocess.PIPE, creationflags=creationflags) as ps:
++    try:
++        ps = subprocess.Popen(cmd, stdout=subprocess.PIPE, creationflags=creationflags)
++    except (PermissionError, OSError):
++        yield from _command_output_in_process(args, use_idle)
++        return
++
++    with ps:
+         stdout = ps.stdout
+         assert stdout is not None
+ 
+diff --git a/scripts/addons_core/bl_pkg/cli/blender_ext.py b/scripts/addons_core/bl_pkg/cli/blender_ext.py
+index 43e3588..ca05d58 100644
+--- a/scripts/addons_core/bl_pkg/cli/blender_ext.py
++++ b/scripts/addons_core/bl_pkg/cli/blender_ext.py
+@@ -5626,6 +5626,9 @@ def msg_print_json_0(ty: str, data: PrimTypeOrSeq) -> bool:
+ 
+ 
+ def msglog_from_args(args: argparse.Namespace) -> MessageLogger:
++    if getattr(args, "msg_fn", None) is not None:
++        return MessageLogger(args.msg_fn)
++
+     # Will be None when running form Blender.
+     output_type = getattr(args, "output_type", 'TEXT')
+ 
+@@ -5648,31 +5651,36 @@ def main(
+         args_internal: bool = True,
+         args_extra_subcommands_fn: ArgsSubparseFn | None = None,
+         prog: str | None = None,
++        msg_fn: MessageFn | None = None,
+ ) -> int:
+     # NOTE: only manipulate Python's run-time such as encoding & SIGINT when running stand-alone.
+ 
+-    # Run early to prevent a `KeyboardInterrupt` exception.
+-    signal.signal(signal.SIGINT, signal_handler_sigint)
+-    if sys.platform == "win32":
+-        # WIN32 needs to check for break as sending SIGINT isn't supported from the caller, see #131947.
+-        signal.signal(signal.SIGBREAK, signal_handler_sigint)
+-
+-    # Needed on WIN32 which doesn't default to `utf-8`.
+-    for fh in (sys.stdout, sys.stderr):
+-        # While this is typically the case, is only guaranteed to be `TextIO` so check `reconfigure` is available.
+-        if not isinstance(fh, io.TextIOWrapper):
+-            continue
+-        # pylint: disable-next=no-member; False positive.
+-        if fh.encoding.lower().partition(":")[0] == "utf-8":
+-            continue
+-        fh.reconfigure(encoding="utf-8")
++    if msg_fn is None:
++        # Run early to prevent a `KeyboardInterrupt` exception.
++        try:
++            signal.signal(signal.SIGINT, signal_handler_sigint)
++            if sys.platform == "win32":
++                # WIN32 needs to check for break as sending SIGINT isn't supported from the caller, see #131947.
++                signal.signal(signal.SIGBREAK, signal_handler_sigint)
++        except (ValueError, AttributeError):
++            pass
++
++        # Needed on WIN32 which doesn't default to `utf-8`.
++        for fh in (sys.stdout, sys.stderr):
++            # While this is typically the case, is only guaranteed to be `TextIO` so check `reconfigure` is available.
++            if not isinstance(fh, io.TextIOWrapper):
++                continue
++            # pylint: disable-next=no-member; False positive.
++            if fh.encoding.lower().partition(":")[0] == "utf-8":
++                continue
++            fh.reconfigure(encoding="utf-8")
+ 
+-    if "--version" in sys.argv:
+-        sys.stdout.write("{:s}\n".format(VERSION))
+-        return 0
++        if "--version" in sys.argv:
++            sys.stdout.write("{:s}\n".format(VERSION))
++            return 0
+ 
+-    if (sys.platform == "win32") and (sys.version_info < (3, 12, 6)):
+-        _worlaround_win32_ssl_cert_failure()
++        if (sys.platform == "win32") and (sys.version_info < (3, 12, 6)):
++            _worlaround_win32_ssl_cert_failure()
+ 
+     parser = argparse_create(
+         args_internal=args_internal,
+@@ -5680,6 +5688,8 @@ def main(
+         prog=prog,
+     )
+     args = parser.parse_args(argv)
++    if msg_fn is not None:
++        args.msg_fn = msg_fn
+     # Call sub-parser callback.
+     if not hasattr(args, "func"):
+         parser.print_help()

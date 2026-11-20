@@ -8,12 +8,16 @@ Questo documento riassume i commit, le modifiche architetturali alla UI e al sis
 
 - **Repository Ufficiale:** [projects.blender.org/blender/blender](https://projects.blender.org/blender/blender)
 - **Branch Ufficiale `ios`:**
-  - Commit di riferimento: `a1de44dd54af75a4c8c4a29a5fed2a1334a87446` (Blender 5.1.2 Release)
-  - Include la base per compilare Blender su architettura Apple Silicon iOS (librerie precompilate `ios_arm64`, patch per FFmpeg, OpenColorIO, OpenImageIO, Python 3.11/3.13, USD).
-- **Branch Ufficiale Sperimentale `ios-workshop`:**
-  - `97232b0f` — *WIP: Experimental editor dock #144945* (Docking modulare per schermi touch)
-  - `922720b9` — *UI: Touch-Capable Area Maintenance #144591* (Gestione e ridimensionamento delle aree con dita/stilo)
-  - `c6e8abfe` — *UI: Menu Behavior Preferences #144838* (Comportamento dei menu a discesa ottimizzato per tocco)
+  - Commit usato: `d9b6fe34ddce527d93b97c0bf42ad92cebac4e4e` (Blender 5.0) — ultimo commit compilabile con le librerie precompilate `lib-ios_arm64`.
+  - La punta attuale `a1de44dd` (Blender 5.1.2, luglio 2026) richiede di compilare da sorgente le dipendenze iOS (`make deps`): non esiste un `lib-ios_arm64` per la 5.1. Patch WIP in `patches/wip-5.1/`.
+- **Branch Ufficiale Sperimentale `ios-workshop`** (nuove UI tablet):
+  - `97232b0f` — *WIP: Experimental editor dock #144945* (Docking modulare per schermi touch) — **incluso** nella build `tablet`
+  - `c6e8abfe` — *UI: Menu Behavior Preferences #144838* (Comportamento dei menu a discesa ottimizzato per tocco) — **incluso** nella build `tablet`
+  - `922720b9` — *UI: Touch-Capable Area Maintenance #144591* (Gestione e ridimensionamento delle aree con dita/stilo) — già presente nel branch `ios` tramite main
+
+### Build prodotte dalla CI
+- **`tablet`**: `ios@d9b6fe34` + `patches/tablet-ui.patch` (commit originali di `ios-workshop`) + `patches/blender-ipad.patch`
+- **`legacy`**: `ios@d9b6fe34` + `patches/blender-ipad.patch`
 
 ---
 

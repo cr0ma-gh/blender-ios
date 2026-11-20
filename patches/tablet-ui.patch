@@ -1,0 +1,1473 @@
+From 35ad61353db7cf4a4167e653e47b3af0ffda37fc Mon Sep 17 00:00:00 2001
+From: Dalai Felinto <dalai@blender.org>
+Date: Thu, 21 Aug 2025 14:14:40 +0200
+Subject: [PATCH 1/2] UI: Menu Behavior Preferences #144838
+
+---
+ scripts/startup/bl_ui/space_userpref.py               | 10 +++++++---
+ .../blender/blenloader/intern/versioning_userdef.cc   | 11 ++++++-----
+ .../blender/editors/interface/interface_handlers.cc   |  7 ++++++-
+ source/blender/makesdna/DNA_userdef_types.h           |  4 ++--
+ source/blender/makesrna/intern/rna_userdef.cc         | 10 ++++++++++
+ 5 files changed, 31 insertions(+), 11 deletions(-)
+
+diff --git a/scripts/startup/bl_ui/space_userpref.py b/scripts/startup/bl_ui/space_userpref.py
+index 341f4e5e5..fbc4f16d5 100644
+--- a/scripts/startup/bl_ui/space_userpref.py
++++ b/scripts/startup/bl_ui/space_userpref.py
+@@ -339,12 +339,16 @@ class USERPREF_PT_interface_statusbar(InterfacePanel, CenterAlignMixIn, Panel):
+         col.prop(view, "show_statusbar_version", text="Blender Version")
+ 
+ 
+-class USERPREF_PT_interface_menus(InterfacePanel, Panel):
++class USERPREF_PT_interface_menus(InterfacePanel, CenterAlignMixIn, Panel):
+     bl_label = "Menus"
+     bl_options = {'DEFAULT_CLOSED'}
+ 
+-    def draw(self, context):
+-        pass
++    def draw_centered(self, context, layout):
++        prefs = context.preferences
++        view = prefs.view
++        col = layout.column()
++        col.prop(view, "use_mouse_out_close")
++        col.prop(view, "use_mouse_neighbor_open")
+ 
+ 
+ class USERPREF_PT_interface_menus_mouse_over(InterfacePanel, CenterAlignMixIn, Panel):
+diff --git a/source/blender/blenloader/intern/versioning_userdef.cc b/source/blender/blenloader/intern/versioning_userdef.cc
+index ba4ead9e4..53206f0bb 100644
+--- a/source/blender/blenloader/intern/versioning_userdef.cc
++++ b/source/blender/blenloader/intern/versioning_userdef.cc
+@@ -1043,9 +1043,8 @@ void blo_do_versions_userdef(UserDef *userdef)
+ 
+   if (!USER_VERSION_ATLEAST(278, 6)) {
+     /* Clear preference flags for re-use. */
+-    userdef->flag &= ~(USER_FLAG_NUMINPUT_ADVANCED | (1 << 2) | USER_FLAG_UNUSED_3 |
+-                       USER_FLAG_UNUSED_6 | USER_FLAG_UNUSED_7 | USER_INTERNET_ALLOW |
+-                       USER_DEVELOPER_UI);
++    userdef->flag &= ~(USER_FLAG_NUMINPUT_ADVANCED | (1 << 2) | USER_FLAG_UNUSED_6 |
++                       USER_FLAG_UNUSED_7 | USER_INTERNET_ALLOW | USER_DEVELOPER_UI);
+     userdef->uiflag &= ~USER_HEADER_BOTTOM;
+     userdef->transopts &= ~(USER_TR_UNUSED_3 | USER_TR_UNUSED_4 | USER_TR_UNUSED_6 |
+                             USER_TR_UNUSED_7);
+@@ -1134,8 +1133,6 @@ void blo_do_versions_userdef(UserDef *userdef)
+ 
+     copy_v3_fl3(userdef->light_ambient, 0.025000, 0.025000, 0.025000);
+ 
+-    userdef->flag &= ~USER_FLAG_UNUSED_4;
+-
+     userdef->uiflag &= ~(USER_HEADER_FROM_PREF | USER_REGISTER_ALL_USERS);
+   }
+ 
+@@ -1676,6 +1673,10 @@ void blo_do_versions_userdef(UserDef *userdef)
+     }
+   }
+ 
++  if (!USER_VERSION_ATLEAST(500, 100)) {
++    userdef->flag |= (USER_MENU_MOUSE_OUT_CLOSE | USER_MENU_NEIGHBOR_OPEN);
++  }
++
+   /**
+    * Always bump subversion in BKE_blender_version.h when adding versioning
+    * code here, and wrap it inside a USER_VERSION_ATLEAST check.
+diff --git a/source/blender/editors/interface/interface_handlers.cc b/source/blender/editors/interface/interface_handlers.cc
+index e6b734e58..c000dd82b 100644
+--- a/source/blender/editors/interface/interface_handlers.cc
++++ b/source/blender/editors/interface/interface_handlers.cc
+@@ -9938,6 +9938,7 @@ static int ui_handle_button_event(bContext *C, const wmEvent *event, uiBut *but)
+         bt = ui_but_find_mouse_over(region, event);
+ 
+         if (bt && bt->active != data) {
++          /* Close open menu when over another. */
+           if (but->type != ButType::Color) { /* exception */
+             data->cancel = true;
+           }
+@@ -11404,7 +11405,7 @@ static int ui_handle_menu_event(bContext *C,
+           }
+ 
+           /* strict check, and include the parent rect */
+-          if (!menu->dotowards && !saferct) {
++          if (!menu->dotowards && !saferct && (U.flag & USER_MENU_MOUSE_OUT_CLOSE)) {
+             if (block->flag & UI_BLOCK_OUT_1) {
+               menu->menuretval = UI_RETURN_OK;
+             }
+@@ -12119,6 +12120,10 @@ static bool ui_can_activate_other_menu(uiBut *but, uiBut *but_other, const wmEve
+     return true;
+   }
+ 
++  if (!(U.flag & USER_MENU_NEIGHBOR_OPEN)) {
++    return false;
++  }
++
+   if (data->menu && data->menu->region &&
+       (BLI_rcti_size_x(&data->menu->region->winrct) > (600.0f * UI_SCALE_FAC)))
+   {
+diff --git a/source/blender/makesdna/DNA_userdef_types.h b/source/blender/makesdna/DNA_userdef_types.h
+index 7bc18c437..a4e9080e3 100644
+--- a/source/blender/makesdna/DNA_userdef_types.h
++++ b/source/blender/makesdna/DNA_userdef_types.h
+@@ -673,8 +673,8 @@ typedef enum eUserPref_Flag {
+   USER_AUTOSAVE = (1 << 0),
+   USER_FLAG_NUMINPUT_ADVANCED = (1 << 1),
+   USER_FLAG_RECENT_SEARCHES_DISABLE = (1 << 2),
+-  USER_FLAG_UNUSED_3 = (1 << 3), /* cleared */
+-  USER_FLAG_UNUSED_4 = (1 << 4), /* cleared */
++  USER_MENU_MOUSE_OUT_CLOSE = (1 << 3),
++  USER_MENU_NEIGHBOR_OPEN = (1 << 4),
+   USER_TRACKBALL = (1 << 5),
+   USER_FLAG_UNUSED_6 = (1 << 6), /* cleared */
+   USER_FLAG_UNUSED_7 = (1 << 7), /* cleared */
+diff --git a/source/blender/makesrna/intern/rna_userdef.cc b/source/blender/makesrna/intern/rna_userdef.cc
+index 98e53b79d..f38b2b0ae 100644
+--- a/source/blender/makesrna/intern/rna_userdef.cc
++++ b/source/blender/makesrna/intern/rna_userdef.cc
+@@ -5056,6 +5056,16 @@ static void rna_def_userdef_view(BlenderRNA *brna)
+       "Open on Mouse Over",
+       "Open menu buttons and pull-downs automatically when the mouse is hovering");
+ 
++  prop = RNA_def_property(srna, "use_mouse_out_close", PROP_BOOLEAN, PROP_NONE);
++  RNA_def_property_boolean_sdna(prop, nullptr, "flag", USER_MENU_MOUSE_OUT_CLOSE);
++  RNA_def_property_ui_text(
++      prop, "Close on Mouse Out", "Close menus when the mouse is moved out of it.");
++
++  prop = RNA_def_property(srna, "use_mouse_neighbor_open", PROP_BOOLEAN, PROP_NONE);
++  RNA_def_property_boolean_sdna(prop, nullptr, "flag", USER_MENU_NEIGHBOR_OPEN);
++  RNA_def_property_ui_text(
++      prop, "Open Neighboring Menus", "Open nearby menus when the mouse hovers them.");
++
+   prop = RNA_def_property(srna, "open_toplevel_delay", PROP_INT, PROP_NONE);
+   RNA_def_property_int_sdna(prop, nullptr, "menuthreshold1");
+   RNA_def_property_range(prop, 1, 40);
+
+From a97942b295fefaca2d2419bc47963639b5917068 Mon Sep 17 00:00:00 2001
+From: Dalai Felinto <dalai@blender.org>
+Date: Thu, 21 Aug 2025 19:18:18 +0200
+Subject: [PATCH 2/2] WIP: Experimental editor dock #144945
+
+---
+ source/blender/blenkernel/BKE_screen.hh       |   4 +-
+ .../intern/grease_pencil_convert_legacy.cc    |   1 +
+ source/blender/blenkernel/intern/screen.cc    |   1 +
+ .../blenloader/intern/versioning_280.cc       |   2 +-
+ .../blenloader/intern/versioning_500.cc       |  41 ++++++
+ source/blender/editors/CMakeLists.txt         |   1 +
+ .../blender/editors/animation/anim_filter.cc  |   1 +
+ .../blender/editors/include/ED_editor_dock.hh |  15 ++
+ source/blender/editors/include/ED_screen.hh   |   3 +
+ .../blender/editors/include/ED_space_api.hh   |   1 +
+ source/blender/editors/interface/interface.cc |   1 +
+ source/blender/editors/interface/resources.cc |   2 +
+ .../interface_template_search_menu.cc         |   1 +
+ source/blender/editors/screen/screen_edit.cc  |  61 ++++++++-
+ .../blender/editors/screen/screen_geometry.cc |  36 +++--
+ .../editors/space_action/space_action.cc      |   8 +-
+ .../blender/editors/space_api/CMakeLists.txt  |   1 +
+ .../blender/editors/space_api/spacetypes.cc   |   1 +
+ .../editors/space_editor_dock/CMakeLists.txt  |  41 ++++++
+ .../editors/space_editor_dock/editor_dock.cc  |  80 +++++++++++
+ .../space_editor_dock/editor_dock_intern.hh   |  15 ++
+ .../space_editor_dock/editor_dock_ops.cc      |  81 +++++++++++
+ .../space_editor_dock/editor_dock_panels.cc   | 129 ++++++++++++++++++
+ .../space_editor_dock/space_editor_dock.cc    | 129 ++++++++++++++++++
+ .../blender/editors/space_file/space_file.cc  |   8 +-
+ .../editors/space_graph/space_graph.cc        |   8 +-
+ .../editors/space_image/space_image.cc        |   8 +-
+ .../blender/editors/space_node/space_node.cc  |   8 +-
+ source/blender/editors/util/CMakeLists.txt    |   1 +
+ source/blender/makesdna/DNA_screen_types.h    |   7 +-
+ source/blender/makesdna/DNA_space_enums.h     |   5 +-
+ source/blender/makesdna/DNA_space_types.h     |  16 +++
+ source/blender/makesrna/intern/rna_screen.cc  |   4 +-
+ source/blender/makesrna/intern/rna_space.cc   |   7 +
+ .../blender/windowmanager/intern/wm_draw.cc   |   1 +
+ .../windowmanager/intern/wm_event_system.cc   |   2 +-
+ .../blender/windowmanager/intern/wm_window.cc |  12 +-
+ 37 files changed, 700 insertions(+), 43 deletions(-)
+ create mode 100644 source/blender/editors/include/ED_editor_dock.hh
+ create mode 100644 source/blender/editors/space_editor_dock/CMakeLists.txt
+ create mode 100644 source/blender/editors/space_editor_dock/editor_dock.cc
+ create mode 100644 source/blender/editors/space_editor_dock/editor_dock_intern.hh
+ create mode 100644 source/blender/editors/space_editor_dock/editor_dock_ops.cc
+ create mode 100644 source/blender/editors/space_editor_dock/editor_dock_panels.cc
+ create mode 100644 source/blender/editors/space_editor_dock/space_editor_dock.cc
+
+diff --git a/source/blender/blenkernel/BKE_screen.hh b/source/blender/blenkernel/BKE_screen.hh
+index b3666498e..30f0ca173 100644
+--- a/source/blender/blenkernel/BKE_screen.hh
++++ b/source/blender/blenkernel/BKE_screen.hh
+@@ -138,9 +138,9 @@ struct SpaceType {
+   void (*space_subtype_item_extend)(bContext *C, EnumPropertyItem **item, int *totitem);
+ 
+   /** Return a custom name, based on subtype or other reason. */
+-  blender::StringRefNull (*space_name_get)(const ScrArea *area);
++  blender::StringRefNull (*space_name_get)(const SpaceLink *space_link);
+   /** Return a custom icon, based on subtype or other reason. */
+-  int (*space_icon_get)(const ScrArea *area);
++  int (*space_icon_get)(const SpaceLink *space_link);
+ 
+   /**
+    * Update pointers for all structs directly owned by this space.
+diff --git a/source/blender/blenkernel/intern/grease_pencil_convert_legacy.cc b/source/blender/blenkernel/intern/grease_pencil_convert_legacy.cc
+index 7f38fa2be..2771c22fd 100644
+--- a/source/blender/blenkernel/intern/grease_pencil_convert_legacy.cc
++++ b/source/blender/blenkernel/intern/grease_pencil_convert_legacy.cc
+@@ -3061,6 +3061,7 @@ static void legacy_gpencil_sanitize_annotations(Main &bmain)
+           case SPACE_TOPBAR:
+           case SPACE_STATUSBAR:
+           case SPACE_SPREADSHEET:
++          case SPACE_EDITOR_DOCK:
+             break;
+         }
+       }
+diff --git a/source/blender/blenkernel/intern/screen.cc b/source/blender/blenkernel/intern/screen.cc
+index 9c898c916..6403ed066 100644
+--- a/source/blender/blenkernel/intern/screen.cc
++++ b/source/blender/blenkernel/intern/screen.cc
+@@ -647,6 +647,7 @@ void BKE_screen_area_free(ScrArea *area)
+   BLI_freelistN(&area->regionbase);
+ 
+   BKE_spacedata_freelist(&area->spacedata);
++  BLI_freelistN(&area->docked_spaces_ordered);
+ 
+   BLI_freelistN(&area->actionzones);
+ }
+diff --git a/source/blender/blenloader/intern/versioning_280.cc b/source/blender/blenloader/intern/versioning_280.cc
+index 2b06d64c2..00e28e05c 100644
+--- a/source/blender/blenloader/intern/versioning_280.cc
++++ b/source/blender/blenloader/intern/versioning_280.cc
+@@ -5601,7 +5601,7 @@ void blo_do_versions_280(FileData *fd, Library * /*lib*/, Main *bmain)
+ 
+     LISTBASE_FOREACH (bScreen *, screen, &bmain->screens) {
+       LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
+-        area->flag &= ~AREA_FLAG_UNUSED_6;
++        area->flag &= ~AREA_FLAG_DOCKED;
+       }
+     }
+ 
+diff --git a/source/blender/blenloader/intern/versioning_500.cc b/source/blender/blenloader/intern/versioning_500.cc
+index f080e187d..6f44ee54f 100644
+--- a/source/blender/blenloader/intern/versioning_500.cc
++++ b/source/blender/blenloader/intern/versioning_500.cc
+@@ -61,6 +61,9 @@
+ 
+ #include "BLO_read_write.hh"
+ 
++#include "ED_editor_dock.hh"
++#include "ED_screen.hh"
++
+ #include "SEQ_iterator.hh"
+ #include "SEQ_modifier.hh"
+ #include "SEQ_sequencer.hh"
+@@ -3047,6 +3050,44 @@ void blo_do_versions_500(FileData *fd, Library * /*lib*/, Main *bmain)
+     FOREACH_NODETREE_END;
+   }
+ 
++  {
++    LISTBASE_FOREACH (bScreen *, screen, &bmain->screens) {
++      ScrArea *docked_area = [&]() -> ScrArea * {
++        LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
++          if (area->flag & AREA_FLAG_DOCKED) {
++            return area;
++          }
++        }
++        return nullptr;
++      }();
++
++      if (!docked_area) {
++        /* Use same method as #screen_geom_vertices_scale_pass() to get the min-max of the screen
++         * verts. Simply adding areas with (0, 0) as position would mess with its screen resizing
++         * calculations. */
++        const int2 min = [&]() {
++          float min[2] = {20000.0f, 20000.0f};
++          float max[2] = {0.0f, 0.0f};
++
++          LISTBASE_FOREACH (ScrVert *, sv, &screen->vertbase) {
++            const float fv[2] = {float(sv->vec.x), float(sv->vec.y)};
++            minmax_v2v2_v2(min, max, fv);
++          }
++          return int2{round_fl_to_int(min[0]), round_fl_to_int(min[1])};
++        }();
++
++        /* #Ed_screen_area_add_empty() substracts 1 from max-values, so keep them 1 here. */
++        const rcti area_rect = {min.x, min.x + 1, min.y, min.y + 1};
++        docked_area = ED_screen_area_add_empty(screen, area_rect);
++        docked_area->flag |= AREA_FLAG_DOCKED;
++
++        /* TODO null for scene - is this a good idea? */
++        blender::ed::editor_dock::add_docked_space(docked_area, SPACE_OUTLINER, nullptr);
++        blender::ed::editor_dock::add_docked_space(docked_area, SPACE_PROPERTIES, nullptr);
++      }
++    }
++  }
++
+   /**
+    * Always bump subversion in BKE_blender_version.h when adding versioning
+    * code here, and wrap it inside a MAIN_VERSION_FILE_ATLEAST check.
+diff --git a/source/blender/editors/CMakeLists.txt b/source/blender/editors/CMakeLists.txt
+index 83b8d7d5f..eaab0c90b 100644
+--- a/source/blender/editors/CMakeLists.txt
++++ b/source/blender/editors/CMakeLists.txt
+@@ -35,6 +35,7 @@ if(WITH_BLENDER)
+   add_subdirectory(space_buttons)
+   add_subdirectory(space_clip)
+   add_subdirectory(space_console)
++  add_subdirectory(space_editor_dock)
+   add_subdirectory(space_file)
+   add_subdirectory(space_graph)
+   add_subdirectory(space_image)
+diff --git a/source/blender/editors/animation/anim_filter.cc b/source/blender/editors/animation/anim_filter.cc
+index 17436d39f..c98786e97 100644
+--- a/source/blender/editors/animation/anim_filter.cc
++++ b/source/blender/editors/animation/anim_filter.cc
+@@ -389,6 +389,7 @@ bool ANIM_animdata_context_getdata(bAnimContext *ac)
+       case SPACE_TOPBAR:
+       case SPACE_STATUSBAR:
+       case SPACE_SPREADSHEET:
++      case SPACE_EDITOR_DOCK:
+         break;
+     }
+   }
+diff --git a/source/blender/editors/include/ED_editor_dock.hh b/source/blender/editors/include/ED_editor_dock.hh
+new file mode 100644
+index 000000000..585e45de6
+--- /dev/null
++++ b/source/blender/editors/include/ED_editor_dock.hh
+@@ -0,0 +1,15 @@
++#pragma once
++
++#include "DNA_space_enums.h"
++
++struct bContext;
++struct Scene;
++struct ScrArea;
++struct SpaceLink;
++
++namespace blender::ed::editor_dock {
++
++SpaceLink *add_docked_space(ScrArea *area, const eSpace_Type type, const Scene *scene);
++void activate_docked_space(bContext *C, ScrArea *docked_area, SpaceLink *space);
++
++}  // namespace blender::ed::editor_dock
+diff --git a/source/blender/editors/include/ED_screen.hh b/source/blender/editors/include/ED_screen.hh
+index c3c7b4e5e..88cda2f12 100644
+--- a/source/blender/editors/include/ED_screen.hh
++++ b/source/blender/editors/include/ED_screen.hh
+@@ -218,6 +218,7 @@ void ED_spacetypes_keymap(wmKeyConfig *keyconf);
+ int ED_area_header_switchbutton(const bContext *C, uiBlock *block, int yco);
+ 
+ /* areas */
++ScrArea *ED_screen_area_add_empty(bScreen *screen, const rcti &rect);
+ /**
+  * Ensure #ScrArea.type and #ARegion.type are set and valid.
+  */
+@@ -229,6 +230,8 @@ void ED_area_init(bContext *C, const wmWindow *win, ScrArea *area);
+ void ED_area_exit(bContext *C, ScrArea *area);
+ blender::StringRefNull ED_area_name(const ScrArea *area);
+ int ED_area_icon(const ScrArea *area);
++blender::StringRefNull ED_spacedata_name(const SpaceLink *space_link);
++int ED_spacedata_icon(const SpaceLink *space_link);
+ int ED_screen_area_active(const bContext *C);
+ void ED_screen_global_areas_refresh(wmWindow *win);
+ void ED_screen_global_areas_sync(wmWindow *win);
+diff --git a/source/blender/editors/include/ED_space_api.hh b/source/blender/editors/include/ED_space_api.hh
+index c56c1c9d4..9828c8289 100644
+--- a/source/blender/editors/include/ED_space_api.hh
++++ b/source/blender/editors/include/ED_space_api.hh
+@@ -40,6 +40,7 @@ void ED_spacetype_console();
+ void ED_spacetype_userpref();
+ void ED_spacetype_clip();
+ void ED_spacetype_statusbar();
++void ED_spacetype_editor_dock();
+ void ED_spacetype_topbar();
+ 
+ namespace blender::ed::vse {
+diff --git a/source/blender/editors/interface/interface.cc b/source/blender/editors/interface/interface.cc
+index bd3673d43..088d69a10 100644
+--- a/source/blender/editors/interface/interface.cc
++++ b/source/blender/editors/interface/interface.cc
+@@ -970,6 +970,7 @@ static void ui_but_update_old_active_from_new(uiBut *oldbut, uiBut *but)
+ 
+   oldbut->flag = (oldbut->flag & ~flag_copy) | (but->flag & flag_copy);
+   oldbut->drawflag = (oldbut->drawflag & ~drawflag_copy) | (but->drawflag & drawflag_copy);
++  oldbut->emboss = but->emboss;
+ 
+   ui_but_extra_icons_update_from_old_but(but, oldbut);
+   std::swap(but->extra_op_icons, oldbut->extra_op_icons);
+diff --git a/source/blender/editors/interface/resources.cc b/source/blender/editors/interface/resources.cc
+index 156b4a3a4..a396356ca 100644
+--- a/source/blender/editors/interface/resources.cc
++++ b/source/blender/editors/interface/resources.cc
+@@ -155,6 +155,8 @@ const uchar *UI_ThemeGetColorPtr(bTheme *btheme, int spacetype, int colorid)
+         case SPACE_CLIP:
+           ts = &btheme->space_clip;
+           break;
++        /* TODO own theme? */
++        case SPACE_EDITOR_DOCK:
+         case SPACE_TOPBAR:
+           ts = &btheme->space_topbar;
+           break;
+diff --git a/source/blender/editors/interface/templates/interface_template_search_menu.cc b/source/blender/editors/interface/templates/interface_template_search_menu.cc
+index 7639643ae..6c278b59c 100644
+--- a/source/blender/editors/interface/templates/interface_template_search_menu.cc
++++ b/source/blender/editors/interface/templates/interface_template_search_menu.cc
+@@ -641,6 +641,7 @@ static MenuSearch_Data *menu_items_from_ui_create(bContext *C,
+           SPACE_MENU_NOP(SPACE_STATUSBAR);
+           SPACE_MENU_NOP(SPACE_TOPBAR);
+           SPACE_MENU_NOP(SPACE_SPREADSHEET);
++          SPACE_MENU_NOP(SPACE_EDITOR_DOCK);
+         }
+       }
+       for (int i = 0; i < idname_array_len; i++) {
+diff --git a/source/blender/editors/screen/screen_edit.cc b/source/blender/editors/screen/screen_edit.cc
+index 32c8d9b33..d415eeb85 100644
+--- a/source/blender/editors/screen/screen_edit.cc
++++ b/source/blender/editors/screen/screen_edit.cc
+@@ -216,6 +216,22 @@ bScreen *screen_add(Main *bmain, const char *name, const rcti *rect)
+   return screen;
+ }
+ 
++ScrArea *ED_screen_area_add_empty(bScreen *screen, const rcti &rect)
++{
++  ScrVert *sv1 = screen_geom_vertex_add(screen, rect.xmin, rect.ymin);
++  ScrVert *sv2 = screen_geom_vertex_add(screen, rect.xmin, rect.ymax - 1);
++  ScrVert *sv3 = screen_geom_vertex_add(screen, rect.xmax - 1, rect.ymax - 1);
++  ScrVert *sv4 = screen_geom_vertex_add(screen, rect.xmax - 1, rect.ymin);
++
++  screen_geom_edge_add(screen, sv1, sv2);
++  screen_geom_edge_add(screen, sv2, sv3);
++  screen_geom_edge_add(screen, sv3, sv4);
++  screen_geom_edge_add(screen, sv4, sv1);
++
++  /* dummy type, no spacedata */
++  return screen_addarea(screen, sv1, sv2, sv3, sv4, SPACE_EMPTY);
++}
++
+ void screen_data_copy(bScreen *to, bScreen *from)
+ {
+   /* Free contents of 'to', is from blenkernel `screen.cc`. */
+@@ -1027,7 +1043,7 @@ void ED_screen_exit(bContext *C, wmWindow *window, bScreen *screen)
+ blender::StringRefNull ED_area_name(const ScrArea *area)
+ {
+   if (area->type && area->type->space_name_get) {
+-    return area->type->space_name_get(area);
++    return area->type->space_name_get(static_cast<SpaceLink *>(area->spacedata.first));
+   }
+ 
+   const int index = RNA_enum_from_value(rna_enum_space_type_items, area->spacetype);
+@@ -1038,7 +1054,7 @@ blender::StringRefNull ED_area_name(const ScrArea *area)
+ int ED_area_icon(const ScrArea *area)
+ {
+   if (area->type && area->type->space_icon_get) {
+-    return area->type->space_icon_get(area);
++    return area->type->space_icon_get(static_cast<SpaceLink *>(area->spacedata.first));
+   }
+ 
+   const int index = RNA_enum_from_value(rna_enum_space_type_items, area->spacetype);
+@@ -1046,6 +1062,32 @@ int ED_area_icon(const ScrArea *area)
+   return item.icon;
+ }
+ 
++blender::StringRefNull ED_spacedata_name(const SpaceLink *space_link)
++{
++  SpaceType *stype = BKE_spacetype_from_id(space_link->spacetype);
++
++  if (stype && stype->space_name_get) {
++    return stype->space_name_get(space_link);
++  }
++
++  const int index = RNA_enum_from_value(rna_enum_space_type_items, space_link->spacetype);
++  const EnumPropertyItem item = rna_enum_space_type_items[index];
++  return item.name;
++}
++
++int ED_spacedata_icon(const SpaceLink *space_link)
++{
++  SpaceType *stype = BKE_spacetype_from_id(space_link->spacetype);
++
++  if (stype && stype->space_icon_get) {
++    return stype->space_icon_get(space_link);
++  }
++
++  const int index = RNA_enum_from_value(rna_enum_space_type_items, space_link->spacetype);
++  const EnumPropertyItem item = rna_enum_space_type_items[index];
++  return item.icon;
++}
++
+ /* *********************************** */
+ 
+ /* case when on area-edge or in azones, or outside window */
+@@ -1331,6 +1373,20 @@ static void screen_global_statusbar_area_refresh(wmWindow *win, bScreen *screen)
+       win, screen, SPACE_STATUSBAR, GLOBAL_AREA_ALIGN_BOTTOM, &rect, size, size_min, size_max);
+ }
+ 
++static void screen_global_editor_dock_area_refresh(wmWindow *win, bScreen *screen)
++{
++  const blender::int2 win_size = WM_window_native_pixel_size(win);
++  /* Reuse header height for width. */
++  const short size = 1.4f * screen_global_header_size();
++  rcti rect;
++
++  BLI_rcti_init(&rect, 0, win_size[0] - 1, 0, win_size[1] - 1);
++  rect.xmin = rect.xmax - size;
++
++  screen_global_area_refresh(
++      win, screen, SPACE_EDITOR_DOCK, GLOBAL_AREA_ALIGN_RIGHT, &rect, size, size, size);
++}
++
+ void ED_screen_global_areas_sync(wmWindow *win)
+ {
+   /* Update screen flags from height in window, this is weak and perhaps
+@@ -1360,6 +1416,7 @@ void ED_screen_global_areas_refresh(wmWindow *win)
+     return;
+   }
+ 
++  screen_global_editor_dock_area_refresh(win, screen);
+   screen_global_topbar_area_refresh(win, screen);
+   screen_global_statusbar_area_refresh(win, screen);
+ }
+diff --git a/source/blender/editors/screen/screen_geometry.cc b/source/blender/editors/screen/screen_geometry.cc
+index 7f7defbe2..159938ce6 100644
+--- a/source/blender/editors/screen/screen_geometry.cc
++++ b/source/blender/editors/screen/screen_geometry.cc
+@@ -208,6 +208,10 @@ static bool screen_geom_vertices_scale_pass(const wmWindow *win,
+      * vertical size since this is called on file load, not just
+      * during resize operations. */
+     LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
++      /* TODO, only skip if docked area is not displayed. */
++      if (area->flag & AREA_FLAG_DOCKED) {
++        continue;
++      }
+       const int border_width = int(ceil(float(U.border_width) * UI_SCALE_FAC));
+       int min = ED_area_headersize() + border_width + border_width - U.pixelsize;
+       if (area->v3->vec.y >= (screen_rect->ymax - 1)) {
+@@ -259,6 +263,8 @@ void screen_geom_vertices_scale(const wmWindow *win, bScreen *screen)
+     max_passes_left--;
+   } while (needs_another_pass && (max_passes_left > 0));
+ 
++  rcti remaining_rect = window_rect;
++
+   /* Global areas have a fixed size that only changes with the DPI.
+    * Here we ensure that exactly this size is set. */
+   LISTBASE_FOREACH (ScrArea *, area, &win->global_areas.areabase) {
+@@ -266,31 +272,43 @@ void screen_geom_vertices_scale(const wmWindow *win, bScreen *screen)
+       continue;
+     }
+ 
+-    int height = ED_area_global_size_y(area) - 1;
++    int size = ED_area_global_size_y(area) - 1;
+ 
+     if (area->v1->vec.y > window_rect.ymin) {
+-      height += U.pixelsize;
++      size += U.pixelsize;
+     }
+     if (area->v2->vec.y < (window_rect.ymax - 1)) {
+-      height += U.pixelsize;
++      size += U.pixelsize;
+     }
+ 
+     /* width */
+-    area->v1->vec.x = area->v2->vec.x = window_rect.xmin;
+-    area->v3->vec.x = area->v4->vec.x = window_rect.xmax - 1;
++    area->v1->vec.x = area->v2->vec.x = remaining_rect.xmin;
++    area->v3->vec.x = area->v4->vec.x = remaining_rect.xmax - 1;
+     /* height */
+-    area->v1->vec.y = area->v4->vec.y = window_rect.ymin;
+-    area->v2->vec.y = area->v3->vec.y = window_rect.ymax - 1;
++    area->v1->vec.y = area->v4->vec.y = remaining_rect.ymin;
++    area->v2->vec.y = area->v3->vec.y = remaining_rect.ymax - 1;
+ 
+     switch (area->global->align) {
+       case GLOBAL_AREA_ALIGN_TOP:
+-        area->v1->vec.y = area->v4->vec.y = area->v2->vec.y - height;
++        area->v1->vec.y = area->v4->vec.y = area->v2->vec.y - size;
++        remaining_rect.ymax -= size;
+         break;
+       case GLOBAL_AREA_ALIGN_BOTTOM:
+-        area->v2->vec.y = area->v3->vec.y = area->v1->vec.y + height;
++        area->v2->vec.y = area->v3->vec.y = area->v1->vec.y + size;
++        remaining_rect.ymin += size;
++        break;
++      case GLOBAL_AREA_ALIGN_LEFT:
++        area->v3->vec.x = area->v4->vec.x = area->v1->vec.x + size;
++        remaining_rect.xmin += size;
++        break;
++      case GLOBAL_AREA_ALIGN_RIGHT:
++        area->v1->vec.x = area->v2->vec.x = area->v3->vec.x - size;
++        remaining_rect.xmax -= size;
+         break;
+     }
+   }
++
++  // BLI_assert(remaining_rect == screen_rect);
+ }
+ 
+ short screen_geom_find_area_split_point(const ScrArea *area,
+diff --git a/source/blender/editors/space_action/space_action.cc b/source/blender/editors/space_action/space_action.cc
+index 9c071fd08..4cce88887 100644
+--- a/source/blender/editors/space_action/space_action.cc
++++ b/source/blender/editors/space_action/space_action.cc
+@@ -929,17 +929,17 @@ static void action_space_subtype_item_extend(bContext * /*C*/,
+   RNA_enum_items_add(item, totitem, rna_enum_space_action_mode_items);
+ }
+ 
+-static blender::StringRefNull action_space_name_get(const ScrArea *area)
++static blender::StringRefNull action_space_name_get(const SpaceLink *space_link)
+ {
+-  SpaceAction *sact = static_cast<SpaceAction *>(area->spacedata.first);
++  const SpaceAction *sact = reinterpret_cast<const SpaceAction *>(space_link);
+   const int index = max_ii(0, RNA_enum_from_value(rna_enum_space_action_mode_items, sact->mode));
+   const EnumPropertyItem item = rna_enum_space_action_mode_items[index];
+   return item.name;
+ }
+ 
+-static int action_space_icon_get(const ScrArea *area)
++static int action_space_icon_get(const SpaceLink *space_link)
+ {
+-  SpaceAction *sact = static_cast<SpaceAction *>(area->spacedata.first);
++  const SpaceAction *sact = reinterpret_cast<const SpaceAction *>(space_link);
+   const int index = max_ii(0, RNA_enum_from_value(rna_enum_space_action_mode_items, sact->mode));
+   const EnumPropertyItem item = rna_enum_space_action_mode_items[index];
+   return item.icon;
+diff --git a/source/blender/editors/space_api/CMakeLists.txt b/source/blender/editors/space_api/CMakeLists.txt
+index b563e844b..ece3b3fe9 100644
+--- a/source/blender/editors/space_api/CMakeLists.txt
++++ b/source/blender/editors/space_api/CMakeLists.txt
+@@ -26,6 +26,7 @@ set(LIB
+   bf_editor_space_buttons
+   bf_editor_space_clip
+   bf_editor_space_console
++  bf_editor_space_editor_dock
+   bf_editor_space_file
+   bf_editor_space_graph
+   bf_editor_space_image
+diff --git a/source/blender/editors/space_api/spacetypes.cc b/source/blender/editors/space_api/spacetypes.cc
+index bb62a58f2..259148287 100644
+--- a/source/blender/editors/space_api/spacetypes.cc
++++ b/source/blender/editors/space_api/spacetypes.cc
+@@ -83,6 +83,7 @@ void ED_spacetypes_init()
+   ED_spacetype_clip();
+   ED_spacetype_statusbar();
+   ED_spacetype_topbar();
++  ED_spacetype_editor_dock();
+   spreadsheet::register_spacetype();
+ 
+   /* Register operator types for screen and all spaces. */
+diff --git a/source/blender/editors/space_editor_dock/CMakeLists.txt b/source/blender/editors/space_editor_dock/CMakeLists.txt
+new file mode 100644
+index 000000000..4ee18c5c8
+--- /dev/null
++++ b/source/blender/editors/space_editor_dock/CMakeLists.txt
+@@ -0,0 +1,41 @@
++# SPDX-FileCopyrightText: 2025 Blender Authors
++#
++# SPDX-License-Identifier: GPL-2.0-or-later
++
++set(INC
++  ../include
++  ../../makesrna
++
++  # RNA_prototypes.hh
++  ${CMAKE_BINARY_DIR}/source/blender/makesrna
++)
++
++set(INC_SYS
++)
++
++set(SRC
++  editor_dock.cc
++  editor_dock_ops.cc
++  editor_dock_panels.cc
++  space_editor_dock.cc
++
++  editor_dock_intern.hh
++)
++
++set(LIB
++  PRIVATE bf::blenkernel
++  PRIVATE bf::blenlib
++  PRIVATE bf::blenloader
++  PRIVATE bf::blentranslation
++  PRIVATE bf::dna
++  PRIVATE bf::gpu
++  PRIVATE bf::intern::guardedalloc
++  PRIVATE bf::windowmanager
++)
++
++
++blender_add_lib(bf_editor_space_editor_dock "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
++
++# RNA_prototypes.hh dna_type_offsets.h
++#add_dependencies(bf_editor_space_editor_dock bf_rna)
++
+diff --git a/source/blender/editors/space_editor_dock/editor_dock.cc b/source/blender/editors/space_editor_dock/editor_dock.cc
+new file mode 100644
+index 000000000..431deceb0
+--- /dev/null
++++ b/source/blender/editors/space_editor_dock/editor_dock.cc
+@@ -0,0 +1,80 @@
++/* SPDX-FileCopyrightText: 2025 Blender Authors
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later */
++
++/** \file
++ * \ingroup speditordock
++ */
++
++#include "BKE_screen.hh"
++
++#include "BLI_listbase.h"
++
++#include "DNA_screen_types.h"
++#include "DNA_space_types.h"
++
++#include "ED_screen.hh"
++
++#include "WM_api.hh"
++
++#include "ED_editor_dock.hh"
++
++namespace blender::ed::editor_dock {
++
++/* TODO this isn't editor dock specific. Move somewhere else? */
++SpaceLink *add_docked_space(ScrArea *area, const eSpace_Type type, const Scene *scene)
++{
++  SpaceType *st = BKE_spacetype_from_id(type);
++  if (!st) {
++    return nullptr;
++  }
++
++  SpaceLink *sl_old = static_cast<SpaceLink *>(area->spacedata.first);
++
++  area->spacetype = type;
++  area->type = st;
++
++  SpaceLink *sl = st->create(area, scene);
++  BLI_addhead(&area->spacedata, sl);
++  BLI_addhead(&area->docked_spaces_ordered, BLI_genericNodeN(sl));
++
++  if (sl_old) {
++    sl_old->regionbase = area->regionbase;
++  }
++  area->regionbase = sl->regionbase;
++  BLI_listbase_clear(&sl->regionbase);
++
++  return sl;
++}
++
++void activate_docked_space(bContext *C, ScrArea *docked_area, SpaceLink *space)
++{
++  BLI_assert(docked_area->flag & AREA_FLAG_DOCKED);
++
++  SpaceType *st = BKE_spacetype_from_id(space->spacetype);
++  if (!st) {
++    return;
++  }
++
++  ED_area_exit(C, docked_area);
++  docked_area->spacetype = space->spacetype;
++  docked_area->type = st;
++
++  SpaceLink *sl_old = static_cast<SpaceLink *>(docked_area->spacedata.first);
++  if (sl_old) {
++    sl_old->regionbase = docked_area->regionbase;
++  }
++  docked_area->regionbase = space->regionbase;
++  BLI_listbase_clear(&space->regionbase);
++  BLI_remlink(&docked_area->spacedata, space);
++  BLI_addhead(&docked_area->spacedata, space);
++
++  ED_area_init(C, CTX_wm_window(C), docked_area);
++  WM_event_add_notifier(C, NC_SPACE | ND_SPACE_CHANGED, docked_area);
++  ED_area_tag_refresh(docked_area);
++  ED_area_tag_redraw(docked_area);
++
++  WM_event_add_mousemove(CTX_wm_window(C));
++}
++
++}  // namespace blender::ed::editor_dock
+diff --git a/source/blender/editors/space_editor_dock/editor_dock_intern.hh b/source/blender/editors/space_editor_dock/editor_dock_intern.hh
+new file mode 100644
+index 000000000..f2b3f8bad
+--- /dev/null
++++ b/source/blender/editors/space_editor_dock/editor_dock_intern.hh
+@@ -0,0 +1,15 @@
++/* SPDX-FileCopyrightText: 2025 Blender Authors
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later */
++
++#pragma once
++
++struct ARegionType;
++
++namespace blender::ed::editor_dock {
++
++void main_region_panels_register(ARegionType *art);
++
++void register_operatortypes();
++
++}  // namespace blender::ed::editor_dock
+diff --git a/source/blender/editors/space_editor_dock/editor_dock_ops.cc b/source/blender/editors/space_editor_dock/editor_dock_ops.cc
+new file mode 100644
+index 000000000..88f5b242b
+--- /dev/null
++++ b/source/blender/editors/space_editor_dock/editor_dock_ops.cc
+@@ -0,0 +1,81 @@
++/* SPDX-FileCopyrightText: 2025 Blender Authors
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later */
++
++/** \file
++ * \ingroup speditordock
++ */
++
++#include "BKE_context.hh"
++
++#include "BLI_listbase.h"
++
++#include "DNA_space_enums.h"
++
++#include "ED_screen.hh"
++
++#include "RNA_access.hh"
++#include "RNA_define.hh"
++#include "RNA_enum_types.hh"
++
++#include "WM_api.hh"
++
++#include "ED_editor_dock.hh"
++#include "editor_dock_intern.hh"
++
++namespace blender::ed::editor_dock {
++
++/* TODO somehow pass docked area? */
++ScrArea *lookup_docked_area(bContext *C)
++{
++  const bScreen *screen = CTX_wm_screen(C);
++  LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
++    if (area->flag & AREA_FLAG_DOCKED) {
++      return area;
++    }
++  }
++  return nullptr;
++}
++
++bool add_editor_poll(bContext *C)
++{
++  return lookup_docked_area(C) != nullptr;
++}
++
++wmOperatorStatus add_editor_exec(bContext *C, wmOperator *op)
++{
++  const eSpace_Type type = eSpace_Type(RNA_enum_get(op->ptr, "type"));
++  if (ELEM(type, SPACE_EMPTY, SPACE_TOPBAR, SPACE_STATUSBAR, SPACE_EDITOR_DOCK)) {
++    return OPERATOR_CANCELLED;
++  }
++
++  ScrArea *docked_area = lookup_docked_area(C);
++
++  SpaceLink *new_space = add_docked_space(docked_area, type, CTX_data_scene(C));
++  activate_docked_space(C, docked_area, new_space);
++
++  return OPERATOR_FINISHED;
++}
++
++void SCREEN_OT_editor_dock_add_editor(wmOperatorType *ot)
++{
++  /* Identifiers. */
++  ot->name = "Add Editor";
++  ot->description = "Choose an editor to add to the editor dock";
++  ot->idname = "SCREEN_OT_editor_dock_add_editor";
++
++  /* Callbacks. */
++  ot->exec = add_editor_exec;
++  // ot->invoke = add_editor_invoke;
++  ot->poll = add_editor_poll;
++
++  /* TODO itemf to filter out invalid types? */
++  RNA_def_enum(ot->srna, "type", rna_enum_space_type_items, SPACE_EMPTY, "Type", "");
++}
++
++void register_operatortypes()
++{
++  WM_operatortype_append(SCREEN_OT_editor_dock_add_editor);
++}
++
++}  // namespace blender::ed::editor_dock
+diff --git a/source/blender/editors/space_editor_dock/editor_dock_panels.cc b/source/blender/editors/space_editor_dock/editor_dock_panels.cc
+new file mode 100644
+index 000000000..1dcc26cb6
+--- /dev/null
++++ b/source/blender/editors/space_editor_dock/editor_dock_panels.cc
+@@ -0,0 +1,129 @@
++/* SPDX-FileCopyrightText: 2025 Blender Authors
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later */
++
++/** \file
++ * \ingroup speditordock
++ */
++
++#include "BKE_screen.hh"
++
++#include "BLI_listbase.h"
++#include "BLI_string_utf8.h"
++
++#include "BLT_translation.hh"
++
++#include "DNA_screen_types.h"
++
++#include "ED_screen.hh"
++
++#include "MEM_guardedalloc.h"
++
++#include "UI_interface.hh"
++#include "UI_interface_c.hh"
++#include "UI_interface_layout.hh"
++
++#include "WM_api.hh"
++
++#include "ED_editor_dock.hh"
++#include "editor_dock_intern.hh"
++
++namespace blender::ed::editor_dock {
++
++static void editor_toggle(bContext *C, ScrArea *docked_area, SpaceLink *space)
++{
++  SpaceLink *sl_old = static_cast<SpaceLink *>(docked_area->spacedata.first);
++  const bool is_visible = docked_area->v3->vec.x - docked_area->v1->vec.x > 1;
++  const bool change_space = sl_old != space;
++
++  if (change_space) {
++    activate_docked_space(C, docked_area, space);
++  }
++
++  const int width = UI_UNIT_X * 16;
++
++  rcti screen_rect;
++  WM_window_screen_rect_calc(CTX_wm_window(C), &screen_rect);
++  if (is_visible && change_space) {
++    /* Pass. Just switching editors. */
++  }
++  else if (is_visible) {
++    docked_area->v1->vec.x = docked_area->v2->vec.x = screen_rect.xmin;
++    docked_area->v1->vec.y = docked_area->v4->vec.y = screen_rect.ymin;
++    docked_area->v3->vec.x = docked_area->v4->vec.x = screen_rect.xmin;
++    docked_area->v2->vec.y = docked_area->v3->vec.y = screen_rect.ymin;
++  }
++  else {
++    docked_area->v1->vec.x = docked_area->v2->vec.x = screen_rect.xmax;
++    docked_area->v1->vec.y = docked_area->v4->vec.y = screen_rect.ymin;
++    docked_area->v3->vec.x = docked_area->v4->vec.x = screen_rect.xmax + width;
++    docked_area->v2->vec.y = docked_area->v3->vec.y = screen_rect.ymax;
++  }
++
++  bScreen *screen = CTX_wm_screen(C);
++  screen->do_refresh = true;
++}
++
++static void editor_dock_draw(const bContext *C, Panel *panel)
++{
++  const bScreen *screen = CTX_wm_screen(C);
++  uiLayout &layout = *panel->layout;
++
++  layout.ui_units_x_set(1.5f);
++  layout.emboss_set(ui::EmbossType::NoneOrStatus);
++
++  LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
++    if ((area->flag & AREA_FLAG_DOCKED) == 0) {
++      continue;
++    }
++
++    const bool is_visible = area->v4->vec.x - area->v1->vec.x > 1;
++
++    LISTBASE_FOREACH_BACKWARD (LinkData *, node, &area->docked_spaces_ordered) {
++      SpaceLink *space = static_cast<SpaceLink *>(node->data);
++      const bool is_active = is_visible && (space == area->spacedata.first);
++
++      uiLayout &row = layout.row(false);
++      if (is_active) {
++        row.emboss_set(ui::EmbossType::Emboss);
++      }
++
++      uiBut *but = uiDefIconBut(layout.block(),
++                                ButType::Tab,
++                                0,
++                                ED_spacedata_icon(space),
++                                0,
++                                0,
++                                UI_UNIT_X * 1.5f,
++                                UI_UNIT_Y * 1.5f,
++                                nullptr,
++                                0,
++                                0,
++                                "");
++      UI_but_func_pushed_state_set(but, [is_active](const uiBut &) { return is_active; });
++      UI_but_func_set(but, [area, space](bContext &C) { editor_toggle(&C, area, space); });
++      UI_but_func_quick_tooltip_set(but,
++                                    [space](const uiBut *) { return ED_spacedata_name(space); });
++      UI_but_drawflag_disable(but, UI_BUT_ICON_LEFT);
++
++      ui::block_layout_set_current(layout.block(), &layout);
++    }
++
++    layout.op_menu_enum(C, "SCREEN_OT_editor_dock_add_editor", "type", "", ICON_ADD);
++  }
++}
++
++void main_region_panels_register(ARegionType *art)
++{
++  PanelType *pt;
++
++  pt = MEM_callocN<PanelType>("spacetype editor dock main region panels");
++  STRNCPY_UTF8(pt->idname, "EDITORDOCK_PT_editor_dock");
++  STRNCPY_UTF8(pt->label, N_("Editor Dock"));
++  STRNCPY_UTF8(pt->translation_context, BLT_I18NCONTEXT_DEFAULT_BPYRNA);
++  pt->flag = PANEL_TYPE_NO_HEADER;
++  pt->draw = editor_dock_draw;
++  BLI_addtail(&art->paneltypes, pt);
++}
++
++}  // namespace blender::ed::editor_dock
+diff --git a/source/blender/editors/space_editor_dock/space_editor_dock.cc b/source/blender/editors/space_editor_dock/space_editor_dock.cc
+new file mode 100644
+index 000000000..022fd95c9
+--- /dev/null
++++ b/source/blender/editors/space_editor_dock/space_editor_dock.cc
+@@ -0,0 +1,129 @@
++/* SPDX-FileCopyrightText: 2025 Blender Authors
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later */
++
++/** \file
++ * \ingroup speditordock
++ */
++
++#include <cstring>
++
++#include "MEM_guardedalloc.h"
++
++#include "BLI_listbase.h"
++#include "BLI_string_utf8.h"
++
++#include "BKE_screen.hh"
++
++#include "ED_screen.hh"
++#include "ED_space_api.hh"
++
++#include "UI_interface.hh"
++#include "UI_view2d.hh"
++
++#include "BLO_read_write.hh"
++
++#include "WM_api.hh"
++#include "WM_types.hh"
++
++#include "editor_dock_intern.hh"
++
++/* ******************** default callbacks for editordock space ******************** */
++
++static SpaceLink *editor_dock_create(const ScrArea * /*area*/, const Scene * /*scene*/)
++{
++  ARegion *region;
++  SpaceEditorDock *space_editor_dock;
++
++  space_editor_dock = MEM_callocN<SpaceEditorDock>("init editor dock");
++  space_editor_dock->spacetype = SPACE_EDITOR_DOCK;
++
++  /* main region */
++  region = BKE_area_region_new();
++  BLI_addtail(&space_editor_dock->regionbase, region);
++  region->regiontype = RGN_TYPE_WINDOW;
++
++  return (SpaceLink *)space_editor_dock;
++}
++
++/* Doesn't free the space-link itself. */
++static void editor_dock_free(SpaceLink * /*sl*/) {}
++
++/* spacetype; init callback */
++static void editor_dock_init(wmWindowManager * /*wm*/, ScrArea * /*area*/) {}
++
++static SpaceLink *editor_dock_duplicate(SpaceLink *sl)
++{
++  SpaceEditorDock *space_editor_dock = static_cast<SpaceEditorDock *>(MEM_dupallocN(sl));
++
++  /* clear or remove stuff from old */
++
++  return (SpaceLink *)space_editor_dock;
++}
++
++static void editor_dock_keymap(wmKeyConfig * /*keyconf*/) {}
++
++/* add handlers, stuff you only do once or on area/region changes */
++static void editor_dock_main_region_init(wmWindowManager *wm, ARegion *region)
++{
++  ED_region_panels_init(wm, region);
++  region->v2d.keepzoom |= V2D_LOCKZOOM_X | V2D_LOCKZOOM_Y;
++}
++
++static void editor_dock_main_region_draw(const bContext *C, ARegion *region)
++{
++  LISTBASE_FOREACH (PanelType *, pt, &region->runtime->type->paneltypes) {
++    pt->flag |= PANEL_TYPE_LAYOUT_VERT_BAR;
++  }
++
++  ED_region_panels_layout(C, region);
++  /* #ED_region_panels_layout adds vertical scroll-bars, we don't want them. */
++  region->v2d.scroll &= ~V2D_SCROLL_VERTICAL;
++  ED_region_panels_draw(C, region);
++}
++
++static void editor_dock_main_region_listener(const wmRegionListenerParams *params)
++{
++  // ARegion *region = params->region;
++  const wmNotifier *wmn = params->notifier;
++
++  /* context changes */
++  switch (wmn->category) {
++    break;
++  }
++}
++
++static void editor_dock_space_blend_write(BlendWriter *writer, SpaceLink *sl)
++{
++  BLO_write_struct(writer, SpaceEditorDock, sl);
++}
++
++void ED_spacetype_editor_dock()
++{
++  std::unique_ptr<SpaceType> st = std::make_unique<SpaceType>();
++  ARegionType *art;
++
++  st->spaceid = SPACE_EDITOR_DOCK;
++  STRNCPY_UTF8(st->name, "Editor Dock");
++
++  st->create = editor_dock_create;
++  st->free = editor_dock_free;
++  st->init = editor_dock_init;
++  st->duplicate = editor_dock_duplicate;
++  st->operatortypes = blender::ed::editor_dock::register_operatortypes;
++  st->keymap = editor_dock_keymap;
++  st->blend_write = editor_dock_space_blend_write;
++
++  /* regions: main window */
++  art = MEM_callocN<ARegionType>("spacetype editor dock main region");
++  art->regionid = RGN_TYPE_WINDOW;
++  art->init = editor_dock_main_region_init;
++  art->draw = editor_dock_main_region_draw;
++  art->listener = editor_dock_main_region_listener;
++  art->prefsizex = UI_UNIT_X * 5; /* Mainly to avoid glitches */
++  art->keymapflag = ED_KEYMAP_UI | ED_KEYMAP_VIEW2D | ED_KEYMAP_HEADER;
++  BLI_addhead(&st->regiontypes, art);
++  blender::ed::editor_dock::main_region_panels_register(art);
++
++  BKE_spacetype_register(std::move(st));
++}
+diff --git a/source/blender/editors/space_file/space_file.cc b/source/blender/editors/space_file/space_file.cc
+index ed8888122..4f3195a48 100644
+--- a/source/blender/editors/space_file/space_file.cc
++++ b/source/blender/editors/space_file/space_file.cc
+@@ -847,17 +847,17 @@ static void file_space_subtype_item_extend(bContext * /*C*/, EnumPropertyItem **
+   RNA_enum_items_add(item, totitem, rna_enum_space_file_browse_mode_items);
+ }
+ 
+-static blender::StringRefNull file_space_name_get(const ScrArea *area)
++static blender::StringRefNull file_space_name_get(const SpaceLink *space_link)
+ {
+-  SpaceFile *sfile = static_cast<SpaceFile *>(area->spacedata.first);
++  const SpaceFile *sfile = reinterpret_cast<const SpaceFile *>(space_link);
+   const int index = RNA_enum_from_value(rna_enum_space_file_browse_mode_items, sfile->browse_mode);
+   const EnumPropertyItem item = rna_enum_space_file_browse_mode_items[index];
+   return item.name;
+ }
+ 
+-static int file_space_icon_get(const ScrArea *area)
++static int file_space_icon_get(const SpaceLink *space_link)
+ {
+-  SpaceFile *sfile = static_cast<SpaceFile *>(area->spacedata.first);
++  const SpaceFile *sfile = reinterpret_cast<const SpaceFile *>(space_link);
+   const int index = RNA_enum_from_value(rna_enum_space_file_browse_mode_items, sfile->browse_mode);
+   const EnumPropertyItem item = rna_enum_space_file_browse_mode_items[index];
+   return item.icon;
+diff --git a/source/blender/editors/space_graph/space_graph.cc b/source/blender/editors/space_graph/space_graph.cc
+index cc73367c1..e83aae784 100644
+--- a/source/blender/editors/space_graph/space_graph.cc
++++ b/source/blender/editors/space_graph/space_graph.cc
+@@ -882,17 +882,17 @@ static void graph_space_subtype_item_extend(bContext * /*C*/,
+   RNA_enum_items_add(item, totitem, rna_enum_space_graph_mode_items);
+ }
+ 
+-static blender::StringRefNull graph_space_name_get(const ScrArea *area)
++static blender::StringRefNull graph_space_name_get(const SpaceLink *space_link)
+ {
+-  SpaceGraph *sgraph = static_cast<SpaceGraph *>(area->spacedata.first);
++  const SpaceGraph *sgraph = reinterpret_cast<const SpaceGraph *>(space_link);
+   const int index = RNA_enum_from_value(rna_enum_space_graph_mode_items, sgraph->mode);
+   const EnumPropertyItem item = rna_enum_space_graph_mode_items[index];
+   return item.name;
+ }
+ 
+-static int graph_space_icon_get(const ScrArea *area)
++static int graph_space_icon_get(const SpaceLink *space_link)
+ {
+-  SpaceGraph *sgraph = static_cast<SpaceGraph *>(area->spacedata.first);
++  const SpaceGraph *sgraph = reinterpret_cast<const SpaceGraph *>(space_link);
+   const int index = RNA_enum_from_value(rna_enum_space_graph_mode_items, sgraph->mode);
+   const EnumPropertyItem item = rna_enum_space_graph_mode_items[index];
+   return item.icon;
+diff --git a/source/blender/editors/space_image/space_image.cc b/source/blender/editors/space_image/space_image.cc
+index 9d2d13f93..8d31ae47b 100644
+--- a/source/blender/editors/space_image/space_image.cc
++++ b/source/blender/editors/space_image/space_image.cc
+@@ -1158,9 +1158,9 @@ static void image_space_subtype_item_extend(bContext * /*C*/,
+   RNA_enum_items_add(item, totitem, rna_enum_space_image_mode_items);
+ }
+ 
+-static blender::StringRefNull image_space_name_get(const ScrArea *area)
++static blender::StringRefNull image_space_name_get(const SpaceLink *space_link)
+ {
+-  SpaceImage *sima = static_cast<SpaceImage *>(area->spacedata.first);
++  const SpaceImage *sima = reinterpret_cast<const SpaceImage *>(space_link);
+   int index = RNA_enum_from_value(rna_enum_space_image_mode_items, sima->mode);
+   if (index < 0) {
+     index = SI_MODE_VIEW;
+@@ -1169,9 +1169,9 @@ static blender::StringRefNull image_space_name_get(const ScrArea *area)
+   return item.name;
+ }
+ 
+-static int image_space_icon_get(const ScrArea *area)
++static int image_space_icon_get(const SpaceLink *space_link)
+ {
+-  SpaceImage *sima = static_cast<SpaceImage *>(area->spacedata.first);
++  const SpaceImage *sima = reinterpret_cast<const SpaceImage *>(space_link);
+   int index = RNA_enum_from_value(rna_enum_space_image_mode_items, sima->mode);
+   if (index < 0) {
+     index = SI_MODE_VIEW;
+diff --git a/source/blender/editors/space_node/space_node.cc b/source/blender/editors/space_node/space_node.cc
+index 1b85a6a43..2c1b8a942 100644
+--- a/source/blender/editors/space_node/space_node.cc
++++ b/source/blender/editors/space_node/space_node.cc
+@@ -1713,9 +1713,9 @@ static void node_space_subtype_item_extend(bContext *C, EnumPropertyItem **item,
+   }
+ }
+ 
+-static blender::StringRefNull node_space_name_get(const ScrArea *area)
++static blender::StringRefNull node_space_name_get(const SpaceLink *space_link)
+ {
+-  SpaceNode *snode = static_cast<SpaceNode *>(area->spacedata.first);
++  const SpaceNode *snode = reinterpret_cast<const SpaceNode *>(space_link);
+   bke::bNodeTreeType *tree_type = bke::node_tree_type_find(snode->tree_idname);
+   if (tree_type == nullptr) {
+     return IFACE_("Node Editor");
+@@ -1723,9 +1723,9 @@ static blender::StringRefNull node_space_name_get(const ScrArea *area)
+   return tree_type->ui_name;
+ }
+ 
+-static int node_space_icon_get(const ScrArea *area)
++static int node_space_icon_get(const SpaceLink *space_link)
+ {
+-  SpaceNode *snode = static_cast<SpaceNode *>(area->spacedata.first);
++  const SpaceNode *snode = reinterpret_cast<const SpaceNode *>(space_link);
+   bke::bNodeTreeType *tree_type = bke::node_tree_type_find(snode->tree_idname);
+   if (tree_type == nullptr) {
+     return ICON_NODETREE;
+diff --git a/source/blender/editors/util/CMakeLists.txt b/source/blender/editors/util/CMakeLists.txt
+index b2331c510..706654b17 100644
+--- a/source/blender/editors/util/CMakeLists.txt
++++ b/source/blender/editors/util/CMakeLists.txt
+@@ -37,6 +37,7 @@ set(SRC
+   ../include/ED_curves.hh
+   ../include/ED_curves_sculpt.hh
+   ../include/ED_datafiles.h
++  ../include/ED_editor_dock.hh
+   ../include/ED_file_indexer.hh
+   ../include/ED_fileselect.hh
+   ../include/ED_geometry.hh
+diff --git a/source/blender/makesdna/DNA_screen_types.h b/source/blender/makesdna/DNA_screen_types.h
+index e2a120ec3..d70faf336 100644
+--- a/source/blender/makesdna/DNA_screen_types.h
++++ b/source/blender/makesdna/DNA_screen_types.h
+@@ -401,6 +401,7 @@ typedef struct ScrGlobalAreaData {
+    * affect their size at all. However, they can still be 'collapsed', by changing this value.
+    * Ignores DPI (#ED_area_global_size_y and winx/winy don't).
+    */
++  /* TODO rename to size? */
+   short cur_fixed_height;
+   /**
+    * For global areas, this is the min and max size they can use depending on
+@@ -422,6 +423,8 @@ enum GlobalAreaFlag {
+ typedef enum GlobalAreaAlign {
+   GLOBAL_AREA_ALIGN_TOP = 0,
+   GLOBAL_AREA_ALIGN_BOTTOM = 1,
++  GLOBAL_AREA_ALIGN_RIGHT = 2,
++  GLOBAL_AREA_ALIGN_LEFT = 3,
+ } GlobalAreaAlign;
+ 
+ typedef struct ScrArea_Runtime {
+@@ -483,6 +486,8 @@ typedef struct ScrArea {
+    * The first item is the active/visible one.
+    */
+   ListBase spacedata;
++  /* The docked editors in this area, in order we want to display them in. */
++  ListBase docked_spaces_ordered; /* #LinkData (#SpaceLink) */
+   /**
+    * #ARegion.
+    * \note This region list is the one from the active/visible editor (first item in
+@@ -566,7 +571,7 @@ enum {
+   AREA_FLAG_ACTIVE_TOOL_UPDATE = (1 << 4),
+   // AREA_FLAG_UNUSED_5 = (1 << 5),
+ 
+-  AREA_FLAG_UNUSED_6 = (1 << 6), /* cleared */
++  AREA_FLAG_DOCKED = (1 << 6),
+ 
+   /**
+    * For temporary full-screens (file browser, image editor render)
+diff --git a/source/blender/makesdna/DNA_space_enums.h b/source/blender/makesdna/DNA_space_enums.h
+index 5207b9b01..6fc422059 100644
+--- a/source/blender/makesdna/DNA_space_enums.h
++++ b/source/blender/makesdna/DNA_space_enums.h
+@@ -1097,9 +1097,10 @@ typedef enum eSpace_Type {
+   SPACE_CLIP = 20,
+   SPACE_TOPBAR = 21,
+   SPACE_STATUSBAR = 22,
+-  SPACE_SPREADSHEET = 23
++  SPACE_SPREADSHEET = 23,
++  SPACE_EDITOR_DOCK = 24
+ 
+-#define SPACE_TYPE_NUM (SPACE_SPREADSHEET + 1)
++#define SPACE_TYPE_NUM (SPACE_EDITOR_DOCK + 1)
+ } eSpace_Type;
+ 
+ /* use for function args */
+diff --git a/source/blender/makesdna/DNA_space_types.h b/source/blender/makesdna/DNA_space_types.h
+index 0e0abb4bf..7839a574a 100644
+--- a/source/blender/makesdna/DNA_space_types.h
++++ b/source/blender/makesdna/DNA_space_types.h
+@@ -1073,6 +1073,22 @@ typedef struct SpaceStatusBar {
+ 
+ /** \} */
+ 
++/* -------------------------------------------------------------------- */
++/** \name Editor Dock
++ * \{ */
++
++typedef struct SpaceEditorDock {
++  SpaceLink *next, *prev;
++  /** Storage of regions for inactive spaces. */
++  ListBase regionbase;
++  char spacetype;
++  char link_flag;
++  char _pad0[6];
++  /* End 'SpaceLink' header. */
++} SpaceEditorDock;
++
++/** \} */
++
+ /* -------------------------------------------------------------------- */
+ /** \name Spreadsheet
+  * \{ */
+diff --git a/source/blender/makesrna/intern/rna_screen.cc b/source/blender/makesrna/intern/rna_screen.cc
+index b8d0c9eb3..86cc1e9c5 100644
+--- a/source/blender/makesrna/intern/rna_screen.cc
++++ b/source/blender/makesrna/intern/rna_screen.cc
+@@ -128,7 +128,7 @@ static int rna_Area_type_get(PointerRNA *ptr)
+ 
+ static void rna_Area_type_set(PointerRNA *ptr, int value)
+ {
+-  if (ELEM(value, SPACE_TOPBAR, SPACE_STATUSBAR)) {
++  if (ELEM(value, SPACE_TOPBAR, SPACE_STATUSBAR, SPACE_EDITOR_DOCK)) {
+     /* Special case: An area can not be set to show the top-bar editor (or
+      * other global areas). However it should still be possible to identify
+      * its type from Python. */
+@@ -208,7 +208,7 @@ static const EnumPropertyItem *rna_Area_ui_type_itemf(bContext *C,
+   }
+ 
+   for (; item_from->identifier; item_from++) {
+-    if (ELEM(item_from->value, SPACE_TOPBAR, SPACE_STATUSBAR)) {
++    if (ELEM(item_from->value, SPACE_TOPBAR, SPACE_STATUSBAR, SPACE_EDITOR_DOCK)) {
+       continue;
+     }
+ 
+diff --git a/source/blender/makesrna/intern/rna_space.cc b/source/blender/makesrna/intern/rna_space.cc
+index 71eac994d..dff4e287f 100644
+--- a/source/blender/makesrna/intern/rna_space.cc
++++ b/source/blender/makesrna/intern/rna_space.cc
+@@ -138,6 +138,12 @@ const EnumPropertyItem rna_enum_space_type_items[] = {
+      "Status Bar",
+      "Global bar at the bottom of the "
+      "screen for general status information"},
++    {SPACE_EDITOR_DOCK,
++     "EDITOR_DOCK",
++     ICON_NONE,
++     "Editor Dock",
++     "Global bar at the side of the "
++     "screen for quick toggling of editors"},
+ 
+     /* Data. */
+     RNA_ENUM_ITEM_HEADING(N_("Data"), nullptr),
+@@ -690,6 +696,7 @@ static StructRNA *rna_Space_refine(PointerRNA *ptr)
+     case SPACE_EMPTY:
+     case SPACE_TOPBAR:
+     case SPACE_STATUSBAR:
++    case SPACE_EDITOR_DOCK:
+       break;
+   }
+ 
+diff --git a/source/blender/windowmanager/intern/wm_draw.cc b/source/blender/windowmanager/intern/wm_draw.cc
+index 3bcd48214..fe04efdb9 100644
+--- a/source/blender/windowmanager/intern/wm_draw.cc
++++ b/source/blender/windowmanager/intern/wm_draw.cc
+@@ -610,6 +610,7 @@ static const char *wm_area_name(ScrArea *area)
+     SPACE_NAME(SPACE_CLIP);
+     SPACE_NAME(SPACE_TOPBAR);
+     SPACE_NAME(SPACE_STATUSBAR);
++    SPACE_NAME(SPACE_EDITOR_DOCK);
+     default:
+       return "Unknown Space";
+   }
+diff --git a/source/blender/windowmanager/intern/wm_event_system.cc b/source/blender/windowmanager/intern/wm_event_system.cc
+index 46a8fefcc..43529b919 100644
+--- a/source/blender/windowmanager/intern/wm_event_system.cc
++++ b/source/blender/windowmanager/intern/wm_event_system.cc
+@@ -6734,7 +6734,7 @@ void WM_window_cursor_keymap_status_refresh(bContext *C, wmWindow *win)
+   }
+ 
+   /* Keep as-is. */
+-  if (ELEM(area->spacetype, SPACE_STATUSBAR, SPACE_TOPBAR)) {
++  if (ELEM(area->spacetype, SPACE_STATUSBAR, SPACE_TOPBAR, SPACE_EDITOR_DOCK)) {
+     return;
+   }
+   if (ELEM(region->regiontype,
+diff --git a/source/blender/windowmanager/intern/wm_window.cc b/source/blender/windowmanager/intern/wm_window.cc
+index 0de9e585a..5a7979943 100644
+--- a/source/blender/windowmanager/intern/wm_window.cc
++++ b/source/blender/windowmanager/intern/wm_window.cc
+@@ -2931,7 +2931,7 @@ void WM_window_screen_rect_calc(const wmWindow *win, rcti *r_rect)
+ 
+   /* Subtract global areas from screen rectangle. */
+   LISTBASE_FOREACH (ScrArea *, global_area, &win->global_areas.areabase) {
+-    int height = ED_area_global_size_y(global_area) - 1;
++    int size = ED_area_global_size_y(global_area) - 1;
+ 
+     if (global_area->global->flag & GLOBAL_AREA_IS_HIDDEN) {
+       continue;
+@@ -2939,10 +2939,16 @@ void WM_window_screen_rect_calc(const wmWindow *win, rcti *r_rect)
+ 
+     switch (global_area->global->align) {
+       case GLOBAL_AREA_ALIGN_TOP:
+-        screen_rect.ymax -= height;
++        screen_rect.ymax -= size;
+         break;
+       case GLOBAL_AREA_ALIGN_BOTTOM:
+-        screen_rect.ymin += height;
++        screen_rect.ymin += size;
++        break;
++      case GLOBAL_AREA_ALIGN_LEFT:
++        screen_rect.xmin += size;
++        break;
++      case GLOBAL_AREA_ALIGN_RIGHT:
++        screen_rect.xmax -= size;
+         break;
+       default:
+         BLI_assert_unreachable();

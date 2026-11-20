@@ -23,12 +23,29 @@ permissions:
   contents: write   # needed to attach the .ipa to a Release
 
 env:
-  BLENDER_COMMIT: a1de44dd54af75a4c8c4a29a5fed2a1334a87446
+  # Last commit of blender/blender@ios that builds against the precompiled lib-ios_arm64
+  # (Blender 5.0, "iOS: Correct Info.plist CFBundleVersion version string").
+  # The newer ios tip a1de44dd (5.1.2) needs iOS deps rebuilt from source with `make deps`
+  # (no 5.1 lib-ios_arm64 exists) — see patches/wip-5.1/.
+  BLENDER_COMMIT: d9b6fe34ddce527d93b97c0bf42ad92cebac4e4e
 
 jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 350   # a full Blender build is large
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Blender 5.0 + new tablet UI from blender/blender@ios-workshop
+          # (Menu Behavior Preferences #144838, Experimental editor dock #144945).
+          - variant: tablet
+            extra_patches: patches/tablet-ui.patch
+          # Blender 5.0 as on the ios branch, without the workshop UI.
+          - variant: legacy
+            extra_patches: ""
+    env:
+      IPA_NAME: Blender-iPad-Unofficial-${{ matrix.variant }}.ipa
 
     steps:
       - name: Checkout this overlay repo
@@ -61,9 +78,13 @@ jobs:
           python3 ./build_files/utils/make_update.py --no-blender --use-ios-libraries
           test -d lib/ios_arm64 || { echo "::error::iOS libraries (lib/ios_arm64) missing"; exit 1; }
 
-      - name: Apply this repo's patch + custom icon/branding
+      - name: Apply this repo's patches + custom icon/branding
         run: |
           cd blender
+          for p in ${{ matrix.extra_patches }}; do
+            echo "Applying $p"
+            git apply "../overlay/$p"
+          done
           git apply ../overlay/patches/blender-ipad.patch
           cp ../overlay/ios/icon/blender_icon.icns release/ios/Blender.app/Assets/blender_icon.icns
 
@@ -120,14 +141,14 @@ jobs:
           rm -rf Payload && mkdir -p Payload
           cp -R "$APP" Payload/
           find Payload -type l ! -exec test -e {} \; -delete || true
-          zip -qr Blender-iPad-Unofficial.ipa Payload
-          echo "Final IPA size: $(du -sh Blender-iPad-Unofficial.ipa)"
+          zip -qr "$IPA_NAME" Payload
+          echo "Final IPA size: $(du -sh "$IPA_NAME")"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Blender-iPad-Unofficial-ipa
-          path: Blender-iPad-Unofficial.ipa
+          name: Blender-iPad-Unofficial-${{ matrix.variant }}-ipa
+          path: ${{ env.IPA_NAME }}
           if-no-files-found: error
 
       # Publish Release on tag pushes or on manual workflow_dispatch with publish_release=true
@@ -141,9 +162,10 @@ jobs:
           else
             TAG="build-${{ github.run_number }}"
           fi
-          # Create the release if it's new; otherwise just (re)attach the IPA.
-          gh release create "$TAG" Blender-iPad-Unofficial.ipa \
+          # Both matrix jobs publish into the same release: whichever finishes first creates it,
+          # the other one just attaches its IPA.
+          gh release create "$TAG" "$IPA_NAME" \
             --repo "${{ github.repository }}" \
             --title "Blender iPad (Unofficial) $TAG" \
-            --notes "Unsigned IPA built from blender/blender@ios (${BLENDER_COMMIT}) + UI & input adaptations. Sideload with Sideloadly, AltStore, SideStore, or TrollStore (free Apple ID = 7-day expiry). Unofficial build — not affiliated with the Blender Foundation." \
-          || gh release upload "$TAG" Blender-iPad-Unofficial.ipa --repo "${{ github.repository }}" --clobber
+            --notes "Unsigned IPAs built from blender/blender@ios (${BLENDER_COMMIT}, Blender 5.0) + UI & input adaptations. 'tablet' adds the new touch UI from blender/blender@ios-workshop (menu behavior, editor dock); 'legacy' is the plain ios branch. Sideload with Sideloadly, AltStore, SideStore, or TrollStore (free Apple ID = 7-day expiry). Unofficial build — not affiliated with the Blender Foundation." \
+          || gh release upload "$TAG" "$IPA_NAME" --repo "${{ github.repository }}" --clobber
